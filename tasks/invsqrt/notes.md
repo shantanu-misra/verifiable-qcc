@@ -238,3 +238,35 @@ configurations are in `tasks/invsqrt/pwquad_tables/`, the rest regenerate in min
   all three with one `init_lookup` (73 output bits, 254 Toffolis), `del_lookup` c2 after step 1, re-`init_lookup`
   c2 for the uncompute; address = `x[14:22]`, delta rows = `x[0:14]` with weights 2^-7 … 2^-20; `p` lives in the
   low 29 bits of the 39-bit `y1`; x = 1 wraps `y1` to 0, which is the correct phase mod 1 (model checks this).
+
+## 7. Built circuit: `circuits/invsqrt/invsqrt_620851_d9159333.kmx` (2026-10-24)
+
+Generator `tasks/invsqrt/build_pwquad.py` (deg 2, k = 8, wc = 22, wp = 28, d = 14, table
+`pwquad_tables/deg2_k8_wc22_wp28_d14.json`), built from the reference's own `_normalize` / `_add_row` /
+`_denormalize` / `_phase_by_bits` plus one joint `init_lookup` of (c2, c1, c0) = 73 bits, `del_lookup` of c2 after
+step 1, re-lookup of c2 for the uncompute, joint `del_lookup` at the end. Unary denormalize, no id aliasing yet.
+`build_pwquad.py --check` simulated the compute-only prefix for all 3,133,452 x: **0 mismatches** against
+`model_pwquad.py` (y1 and x_norm).
+
+**Official verifier, full 200,540,928-shot run (`runs/invsqrt_620851_d9159333_full.json`): PASS, score 620,851.06**
+— 3.345× below the verified baseline 2,076,774.23.
+
+| quantity | verified | model / static estimate (§6) |
+|---|---|---|
+| score Q × C | **620,851.06** | 6.2e5–6.7e5 |
+| Q | 171 | 181 (c1 register is 22 not 23 bits; no separate carries beyond the measured 28) |
+| Toffolis (executed = static) | 3,384 | 2 × 1,315 + 230 + 600 = 3,460 |
+| C | 3,630.71 | 3,705 |
+| T gates | 1 | 1 |
+| rotations | 36 at eps 1.344e-12 → 27.39 T each → 246.7 Toffoli-eq (6.8 % of C) | 36 × 6.8 |
+| worst \|error\|/tol | 0.7348 at x = 263,159 | 0.735 at x = 263,159 |
+| reaction depth / ops | 1,407 / 44,652 | — |
+| sha256 | d9159333… | — |
+
+Per-stage static Toffolis (from `analyze_reference.py` on this circuit): normalize 120 / 110, lookup_all 254,
+step 1 ≈ 450, del_c2 25, step 2 ≈ 590, denormalize 300 per direction, relookup_c2 254, del_all 25.
+
+Next steps, in order of expected gain (all against Q·C = 6.21e5): binary-s barrel denormalize (#3, ≈ −280
+Toffolis → C ≈ 3,350, −7.7 %); id aliasing (#2: c2's 22 ids are dead during step 2 and the un-step-2, the
+upper 10 bits of y1 are dead until denormalize — the step-1 scratch/carries could live there) → Q ≈ 150–160;
+wc = 20 (model 0.761, −80 Toffolis/direction, −4 Q); then rotation trimming (#8) once margins are known.
