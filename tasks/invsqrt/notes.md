@@ -374,3 +374,4 @@ The model reproduces the public notebooks' own worst-case figures (0.928 / 0.945
 | §9 (previous best) | invsqrt_488144_1b46306c | 488,144.07 | 147 | 3,074 | 3,320.71 | 36 / 1.344e-12 | 0.7348, 263,159 |
 | M1 signed-digit rows on the §9 structure (pairs:12:22:29:0) | invsqrt_297214_073caa33 | **297,214.22** | 124 | 2,145 | 2,396.89 | 37 / 1.680e-12 | 0.6594, 1,052,866 |
 | M2 + binary normalisation to [1,2), parity QROM, HMR-cleared flags (binary:10:19:28:2 drop 5; no splits) | invsqrt_208096_db78695a | **208,096.17** | 107 | 1,712.0 (static 1,723) | 1,944.82 | 33 / 4.954e-13 | 0.9100, 1,019,970 |
+| M3 + static high word phased and erased before the arithmetic; rows on the 21-bit L (same widths, LB 21 / S 20) | invsqrt_173343_1be3650b | **173,343.36** | 93 | 1,551.0 (static 1,562) | 1,863.91 | 44 / 3.715e-13 | 0.9100, 1,019,970 |
