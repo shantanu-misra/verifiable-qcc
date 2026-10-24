@@ -365,49 +365,52 @@ class BMDecoder:
                 self.mbuc_erase_sum_of_products(d, self.disc_pairs(n, S))
             b.free(d)
 
-    # ---- omega and the S_1..S_t <-> omega swap -------------------------------------------------------
-    # omega_i (i < t) is stored in the qubits of the erased syndrome S[i+1]; omega_{t-1} is built in a temporary
-    # register and moved into S[0] once that is erased, so the swap costs no extra qubit ids.
+    # ---- omega in place of S_1..S_t -----------------------------------------------------------------
+    # omega_i = sum_{k<=i} sigma_k S[i-k] (scaled sigma = A2) is accumulated *in* S[i]'s register, top-down:
+    # S[i] <- A2[0] * S[i] (in-place scaling via s^-1: two products), then S[i] ^= sum_{k>=1} A2[k] S[i-k].
     def alloc_omega(self, S):
-        self.Wtmp = self.b.alloc_qubits(self.deg)
-        self.W = [S[i + 1] for i in range(self.t - 1)] + [S[0]]
+        self.W = [S[i] for i in range(self.t)]
 
-    def omega_pairs(self, i: int, S):
-        return [(self.A2[k], S[i - k]) for k in range(i + 1)]
-
-    def _erase_S(self, i: int, S, w, inv0):
-        """S[i] ^= A2[0]^-1 (w + sum_{k>=1} A2[k] S[i-k])  -> 0, with w holding omega_i."""
+    def _scale_inplace(self, x, s, sinv):
+        """x <- s * x using p = s*x; x ^= sinv*p; swap(p, x) (2 products, p transient)."""
         b = self.b
-        u = b.alloc_qubits(self.deg)
-        b.cx(w, u)
-        for k in range(1, i + 1):
-            self.xor_prod(self.A2[k], S[i - k], u)
-        self.xor_prod(u, inv0, S[i])
-        self.mbuc_erase_sum_of_products(u, [(self.A2[k], S[i - k]) for k in range(1, i + 1)] + [(w, None)])
-        b.free(u)
+        p = b.alloc_qubits(self.deg)
+        self.xor_prod(s, x, p)
+        self.xor_prod(sinv, p, x)          # x -> 0
+        b.swap(p, x)
+        b.free(p)
 
     def omega_swap_forward(self, S):
         b, t = self.b, self.t
-        with b.mark('omega_swap'):
-            inv0, sc = self.inv_init(self.A2[0])
+        with b.mark('omega_inplace'):
+            if self.tower is not None:
+                sinv = self.tower.init_inverse_compact(b, self.A2[0])
+            else:
+                sinv, sc = self.inv_init(self.A2[0])
             for i in range(t - 1, -1, -1):
-                w = self.Wtmp if i == t - 1 else S[i + 1]
-                for k in range(i + 1):
-                    self.xor_prod(self.A2[k], S[i - k], w)       # w = omega_i
-                self._erase_S(i, S, w, inv0)
-            b.swap(self.Wtmp, S[0])                               # omega_{t-1} -> S[0]'s qubits
-            self.inv_del(self.A2[0], inv0, sc)
+                self._scale_inplace(S[i], self.A2[0], sinv)
+                for k in range(1, i + 1):
+                    self.xor_prod(self.A2[k], S[i - k], S[i])
+            if self.tower is not None:
+                self.tower.del_inverse_compact(b, self.A2[0], sinv); b.free(sinv)
+            else:
+                self.inv_del(self.A2[0], sinv, sc)
 
     def omega_swap_reverse(self, S):
         b, t = self.b, self.t
-        with b.mark('omega_unswap'):
-            inv0, sc = self.inv_init(self.A2[0])
-            b.swap(self.Wtmp, S[0])
+        with b.mark('omega_inplace_rev'):
+            if self.tower is not None:
+                sinv = self.tower.init_inverse_compact(b, self.A2[0])
+            else:
+                sinv, sc = self.inv_init(self.A2[0])
             for i in range(t):
-                w = self.Wtmp if i == t - 1 else S[i + 1]
-                self._erase_S(i, S, w, inv0)                      # restores S[i]
-                self.mbuc_erase_sum_of_products(w, self.omega_pairs(i, S))
-            self.inv_del(self.A2[0], inv0, sc)
+                for k in range(1, i + 1):
+                    self.xor_prod(self.A2[k], S[i - k], S[i])
+                self._scale_inplace(S[i], sinv, self.A2[0])
+            if self.tower is not None:
+                self.tower.del_inverse_compact(b, self.A2[0], sinv); b.free(sinv)
+            else:
+                self.inv_del(self.A2[0], sinv, sc)
 
     # ---- Chien search + Forney phase kickback -------------------------------------------------------
     def sweep(self, E):
@@ -482,7 +485,6 @@ class BMDecoder:
         with b.mark('sweep'):
             self.sweep(E)
         self.omega_swap_reverse(S)
-        b.free(self.Wtmp)
         with b.mark('bm_reverse'):
             for i in reversed(range(self.n)):
                 self.reverse_step(i, S)
