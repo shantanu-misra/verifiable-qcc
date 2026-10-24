@@ -24,6 +24,7 @@ distinct qubit id mentioned, not peak allocation — reuse ids), T = mean Toffol
 ```
 CLAUDE.md                  # this index
 docs/{invsqrt,dqi}.md      # contract, cost formula, verifier flags/output fields, verified baseline per task
+docs/submission.md         # zip layout, metric-only checks, upload record + leaderboard snapshots
 Dockerfile, docker-compose.yml   # linux/amd64 image, kickmix built from the submodule; repo mounted at /work
 data/                      # Kaggle competition data, gitignored: sample_submission/, verifiers/ (read-only), kickmix/
 third_party/Qualtran/      # git submodule, pinned; only kickmix/ and docs/kickmix/ matter
@@ -32,8 +33,7 @@ results/                   # verifier negative checks and other recorded experim
 tasks/<task>/              # generators (Python, km.CircuitBuilder) + notes.md; dfthcsos is baseline passthrough
 circuits/<task>/           # committed .kmx/.kmb outputs, named <task>_<cost>_<shortsha>.kmx
 submissions/               # zipped bundles actually uploaded + sidecar .txt with the Kaggle score
-scripts/                   # verify.sh (official verifier in Docker → runs/), bundle.sh (submission zip),
-                           # verifier_checks.py (negative tests → results/verifier_checks.md)
+scripts/                   # verify.sh (official verifier in Docker → runs/), bundle.sh (zip), verifier_checks.py (→ results/)
 ```
 
 ## Build and run (Docker)
@@ -58,7 +58,7 @@ scripts/verify.sh dqi     circuits/dqi/<file>.kmb [--max-workers 2]     # ≈3.5
 Wraps `docker compose run … python data/verifiers/<task>/verify_submission_<task>.py <circuit> [args]` and saves
 the JSON to `runs/`. PASS → `{"status":"PASS","score":…}` (score = per-task cost, lower is better); FAIL → exit 1
 and `{"status":"FAIL","error":…}`. Seeds come from SHA-256 of the canonical `.kmb` plus a salt that is private on
-the leaderboard, so a local pass is strong evidence, not identity. Field meanings: `docs/<task>.md`.
+the leaderboard, so a local pass is strong evidence, not identity. Fields: `docs/<task>.md`; packaging, metric-only rejections, uploads: `docs/submission.md`.
 
 ## kickmix cheat sheet
 
