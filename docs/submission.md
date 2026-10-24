@@ -31,6 +31,10 @@ whole submission before any simulation, so a local `"status": "PASS"` is necessa
 
 Our generated circuits: single named register `x`, ids < 200 — all of the above hold; `scripts/bundle.sh` keeps the
 layout. If a generator ever allocates ids sparsely, check the id cap, not just `num_qubits`.
+- **Format trap** (reported by a public notebook that lost a submission to it): `Circuit.to_file(path)` writes
+  *text* unless `format='kmb'` is passed, whatever the suffix; the standalone verifier auto-detects, but the metric
+  picks the format from the suffix and a text file named `.kmb` fails the whole submission with no message. We
+  write `.kmx`; if we ever ship `.kmb`, always pass `format='kmb'`.
 
 ## Upload record
 
