@@ -375,3 +375,15 @@ The model reproduces the public notebooks' own worst-case figures (0.928 / 0.945
 | M1 signed-digit rows on the §9 structure (pairs:12:22:29:0) | invsqrt_297214_073caa33 | **297,214.22** | 124 | 2,145 | 2,396.89 | 37 / 1.680e-12 | 0.6594, 1,052,866 |
 | M2 + binary normalisation to [1,2), parity QROM, HMR-cleared flags (binary:10:19:28:2 drop 5; no splits) | invsqrt_208096_db78695a | **208,096.17** | 107 | 1,712.0 (static 1,723) | 1,944.82 | 33 / 4.954e-13 | 0.9100, 1,019,970 |
 | M3 + static high word phased and erased before the arithmetic; rows on the 21-bit L (same widths, LB 21 / S 20) | invsqrt_173343_1be3650b | **173,343.36** | 93 | 1,551.0 (static 1,562) | 1,863.91 | 44 / 3.715e-13 | 0.9100, 1,019,970 |
+| M4 + derivative split (12-bit residual + 7-bit looked-up coarse), top-carry reuse, borrowed x[21], c2 at 8 bits (binary:9:19:28:2 drop 5) | invsqrt_165584_2d7c9f6e | **165,583.96** | 93 | 1,465.0 (static 1,476) | 1,780.47 | 44 / 2.783e-13 | 0.9100, 1,019,970 |
+
+M4 is **12.54× below the baseline** and within the public band (Alex Chilton v6 reports 165,026 at 93 qubits /
+1,470 Toffolis; our executed count is 1,465 but our rotation eps is smaller, so C is 1,780 vs their ≈ 1,775).
+Static per-stage Toffolis of M4 (`analyze_reference.py`, depth 1): normalise 105, lookup 254, phase_high 46,
+erase_high 15, inner rows 2 × 88, merge 2 × 6, outer rows 2 × 280, phase_low 143, unlookup 25, un-normalise
+~90 static (≈ 79 executed: the flag fixups run on half the shots).
+
+Where the 93 qubits sit at the two peaks: outer rows = x 22 + flags 5 + c2 8 + resid 12 + coarse 7 + L 21 +
+17 carries (18 needed, one borrowed from x[21]) = 92 + lookup/ext slack → 93; high-word phase = 22 + 5 + 8 + 12
++ 7 + 21 + H 8 + ext 10 = 93. The idle c2 (8) during the outer rows is the only slack, and releasing it costs a
+re-lookup (+254 Toffolis). Next ideas of our own are listed in §11.
