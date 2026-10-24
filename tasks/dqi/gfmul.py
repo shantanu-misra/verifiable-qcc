@@ -10,11 +10,23 @@ from __future__ import annotations
 import kickmix as km
 
 
+# 17-product formula for 6-term polynomial multiplication over GF(2), found by randomised search over symmetric
+# subset products P_S = (sum_{i in S} a_i)(sum_{j in S} b_j) (build/search_m6.py, build/solve_m6.py); each entry is
+# (S, product coefficients c_m that P_S contributes to).
+M6_TERMS = [([1], [0, 4, 5, 6, 7, 8]), ([0, 1], [0, 2, 3, 5]), ([1, 2], [0, 1, 2, 5, 7, 9]), ([0, 1, 2], [0, 1, 2, 3, 4, 8]),
+            ([3], [3, 5, 6, 8]), ([0, 2, 4], [0, 1, 3, 4, 5, 8]), ([1, 2, 4], [0, 1, 4, 9]), ([0, 3, 4], [0, 1, 3, 4]),
+            ([0, 1, 3, 4], [0, 1, 4, 5]), ([5], [0, 1, 5, 6, 8, 10]), ([1, 2, 5], [0, 1, 3, 6, 7, 9]), ([1, 3, 5], [0, 1, 3, 7]),
+            ([0, 2, 3, 5], [0, 1, 5, 8]), ([1, 4, 5], [0, 1, 6, 7]), ([1, 2, 4, 5], [0, 1, 3, 5, 6, 9]),
+            ([1, 3, 4, 5], [0, 1, 3, 5, 7, 8]), ([0, 1, 2, 3, 4, 5], [0, 1, 8])]
+
+
 def karatsuba_terms(n: int, lo: int = 0) -> list[tuple[list[int], list[int], list[int]]]:
-    """AND terms for the polynomial product of two n-bit polynomials (n = 3 * 2^k).
+    """AND terms for the polynomial product of two n-bit polynomials (n in {3, 6, 12}): 6, 17, 51 products.
 
     Returns a list of (L, R, outs): L and R are lists of input bit indices (relative to `lo`) whose XORs are
     multiplied, and `outs` the product-coefficient indices (relative to 2*lo) the term contributes to."""
+    if n == 6:
+        return [([lo + i for i in S], [lo + i for i in S], outs) for S, outs in M6_TERMS]
     if n == 3:
         a = [lo, lo + 1, lo + 2]
         return [([a[0]], [a[0]], [0, 1, 2]),        # a0b0 -> c0, c1, c2
@@ -27,9 +39,9 @@ def karatsuba_terms(n: int, lo: int = 0) -> list[tuple[list[int], list[int], lis
     terms = []
     # low = A0 B0 -> c[0..], high = A1 B1 -> c[2h..], mid = (A0+A1)(B0+B1) + low + high -> c[h..]
     for L, R, outs in karatsuba_terms(h, lo):
-        terms.append((L, R, sorted(set(outs) | set(o + h for o in outs))))
+        terms.append((L, R, sorted(set(outs) ^ set(o + h for o in outs))))          # XOR: overlaps cancel
     for L, R, outs in karatsuba_terms(h, lo + h):
-        terms.append((L, R, sorted(set(o + 2 * h for o in outs) | set(o + h for o in outs))))
+        terms.append((L, R, sorted(set(o + 2 * h for o in outs) ^ set(o + h for o in outs))))
     for L, R, outs in karatsuba_terms(h, lo):
         Lm = [i for i in L] + [i + h for i in L]
         Rm = [i for i in R] + [i + h for i in R]

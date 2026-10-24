@@ -109,16 +109,25 @@ class Tower:
                 if self.nusq[r][i]:
                     b.cx(bb[i], N[r])
 
-    def _sub_inv_init(self, b, N):
+    def _sub_inv_init(self, b, N, gate=None):
+        """(Ninv, scaffold) for the subfield; with `gate`, Ninv = gate * N^-1 (gating is pushed to the smallest field)."""
         if self.sub is not None:
-            return self.sub.init_inverse_with_scaffold(b, N)
-        return b.init_gf2_inverse_with_scaffold(N, field=self.g)
+            return self.sub.init_inverse_with_scaffold(b, N, gate=gate)
+        inv, sc = b.init_gf2_inverse_with_scaffold(N, field=self.g)
+        if gate is None:
+            return inv, (sc, None, None)
+        g_inv = b.alloc_qubits(len(N))
+        b.ccx(gate, inv, g_inv)
+        return g_inv, (sc, inv, gate)
 
     def _sub_inv_del(self, b, N, Ninv, sc):
         if self.sub is not None:
             self.sub.del_inverse_with_scaffold(b, N, target=Ninv, scaffold=sc); b.free(Ninv)
         else:
-            b.del_gf2_inverse_with_scaffold(N, target=Ninv, scaffold=sc, field=self.g); b.free(sc); b.free(Ninv)
+            sc0, inv, gate = sc
+            if inv is not None:
+                b.del_and(gate, inv, Ninv); b.free(Ninv); Ninv = inv
+            b.del_gf2_inverse_with_scaffold(N, target=Ninv, scaffold=sc0, field=self.g); b.free(sc0); b.free(Ninv)
 
     def init_inverse_with_scaffold(self, b: km.CircuitBuilder, x, *, target=None, gate=None):
         """target := x^-1 (0 -> 0), or gate * x^-1 when a control qubit `gate` is given (k Toffolis extra).
@@ -131,14 +140,9 @@ class Tower:
         N = b.alloc_qubits(k)
         b.cx(ab, N)
         self._norm_linear(b, a, bb, N)
-        Ninv, sc = self._sub_inv_init(b, N)
-        if gate is not None:
-            Ng = b.alloc_qubits(k)
-            b.ccx(gate, Ninv, Ng)
-            use = Ng
-        else:
-            Ng = None
-            use = Ninv
+        Ninv, sc = self._sub_inv_init(b, N, gate)      # gated inside the subfield when gate is given
+        Ng = None
+        use = Ninv
         if target is None:
             target = b.alloc_qubits(2 * k)
         lo, hi = target[:k], target[k:]
@@ -149,6 +153,39 @@ class Tower:
         self.to_poly(b, target)
         self.to_poly(b, x)
         return target, (ab, N, Ninv, sc, Ng, gate)
+
+    def _erase_scaffold(self, b, x, scaffold):
+        """Erase the scaffold (ab, N, Ninv and the subfield's) with 0 Toffolis while x is intact (x in poly basis)."""
+        ab, N, Ninv, sc, Ng, gate = scaffold
+        k = self.k
+        self.to_tower(b, x)
+        a, bb = x[:k], x[k:]
+        self._sub_inv_del(b, N, Ninv, sc)
+        self._norm_linear(b, a, bb, N)
+        b.cx(ab, N)
+        b.del_gf2_mul(a, bb, target=ab, field=self.g)
+        b.free(N); b.free(ab)
+        self.to_poly(b, x)
+
+    def init_inverse_compact(self, b: km.CircuitBuilder, x):
+        """inv = x^-1 with no scaffold kept (scaffold erased for free); uncompute with `del_inverse_compact`."""
+        inv, sc = self.init_inverse_with_scaffold(b, x)
+        self._erase_scaffold(b, x, sc)
+        return inv
+
+    def del_inverse_compact(self, b: km.CircuitBuilder, x, inv):
+        """Rebuild the scaffold (ab and N^-1, ~46 Toffolis), erase inv's two products, erase the scaffold again."""
+        g, k = self.g, self.k
+        self.to_tower(b, x)
+        a, bb = x[:k], x[k:]
+        ab = b.alloc_qubits(k)
+        self._mul(b, a, bb, ab)
+        N = b.alloc_qubits(k)
+        b.cx(ab, N)
+        self._norm_linear(b, a, bb, N)
+        Ninv, sc = self._sub_inv_init(b, N, None)
+        self.to_poly(b, x)
+        self.del_inverse_with_scaffold(b, x, target=inv, scaffold=(ab, N, Ninv, sc, None, None))
 
     def del_inverse_with_scaffold(self, b: km.CircuitBuilder, x, *, target, scaffold):
         g, k = self.g, self.k
@@ -162,8 +199,6 @@ class Tower:
         b.cx(bb, a)
         b.del_gf2_mul(a, use, target=lo, field=g)
         b.cx(bb, a)
-        if Ng is not None:
-            b.del_and(gate, Ninv, Ng); b.free(Ng)
         self._sub_inv_del(b, N, Ninv, sc)
         self._norm_linear(b, a, bb, N)
         b.cx(ab, N)
@@ -208,3 +243,14 @@ if __name__ == '__main__':
     sim.do(c)
     bad = sum(sim.read_within_shot('y', s, out=int) != (s % 2) for s in range(256))
     print('gated: wrong in', bad, 'shots; toffoli', c.operation_statistics().num_toffoli_like - 63, '; phase flips', int(sim.read_phase_flipped_across_shots().sum()))
+    # compact inverse: scaffold erased after use, rebuilt to uncompute
+    b = km.CircuitBuilder(); x = b.create_quantum_register(12, name='x')
+    inv = tw.init_inverse_compact(b, x); y = b.create_quantum_register(12, name='y'); b.ixor_gf2_mul(x, inv, target=y, field=tw.gf)
+    tw.del_inverse_compact(b, x, inv)
+    c = b.finish_circuit(); sim = km.Simulator(batch_size=256, seed=5); sim.use_same_registers_as(c)
+    xs = [random.randrange(1, 4096) for _ in range(255)] + [0]
+    for s, v in enumerate(xs): sim.write_within_shot('x', s, v)
+    sim.do(c)
+    bad = sum(sim.read_within_shot('y', s, out=int) != (1 if xs[s] else 0) for s in range(256))
+    junk = sum(sim.read_within_shot(inv, s, out=int) != 0 for s in range(256))
+    print('compact: wrong', bad, 'inv not cleared', junk, 'toffoli', c.operation_statistics().num_toffoli_like - 63, 'qubits', c.num_qubits, 'phase flips', int(sim.read_phase_flipped_across_shots().sum()))
