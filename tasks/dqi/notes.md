@@ -68,3 +68,22 @@ lanes), 1,893 from the end of `forward_eea` through `reverse_eea` (the builder r
 the EEA peak), back to 869 after `reverse_eea`. 1,893 − 840 = 1,053 workspace qubits: 876 are the second polynomial array,
 87 counters/flags, ≤ 90 EEA-step scratch. The Forney sweep itself only touches 953 ids (σ, σ', ω slots + 72 inverse scratch),
 but reg_b/reg_a stay live underneath it, so Q is set by the EEA, not by the sweep.
+
+## 3. Classical model (`model_bm.py`) and design facts
+
+BM over GF(2¹²) (`berlekamp_massey`) + Chien/Forney (`chien_forney`) reproduces e and the phase parity on verifier-sampled
+shots: 0 mismatches / 2,048 (seed 1); 10,240-shot run in `build/model_bm_10240.log`. Observed: final L = k always (deg C = L,
+no degree drops), the number of length changes = k, ≈ 7.9 zero discrepancies per shot.
+
+Test distribution facts that the design may exploit:
+- weight k: P(k=35) = 2.8 %, P(k≥34) = 12 %, P(k≤20) = 5.5e-5, P(k≤23) ≈ 1.8e-3. Nothing above k = 20 is rare enough to fail on.
+- failure budget: R(ε⁺) with 0/1/2/5/10/25/50 failed shots of 102,400 = 1.1913 / 1.1967 / 1.2014 / 1.2131 / 1.2290 / 1.2659 / 1.3134.
+  One failure costs +0.45 %, ten +3.2 %: inputs with probability ≲ 1e-5 per shot may be left undecoded if handling them
+  costs more than ~1 % of T (a GF(2¹²) coefficient is zero w.p. 2.4e-4 → ~25 shots: too frequent to ignore).
+
+State-size facts (why Q ≈ 1,800 in every published design): BM needs S (70 slots of 12) read-only plus C and B (36 slots
+each) = 142 slots ≈ 1,704 qubits + scratch; Sugiyama/EEA holds two remainder/multiplier rows ≈ 142 slots. (σ, ω) alone
+is 71 slots, and S = ω/σ (power series) is recoverable from it, but the forward computation still peaks at S + C + B.
+Erasing syndromes outside BM's 36-wide window via the backward recurrence (needs C_L ≠ 0, true here) costs ≈ L products
++ 1 inversion per step, i.e. doubles forward/reverse T for Q ≈ 1,300–1,400: roughly break-even on Q²T. The win must come
+from a cheaper T per step or a smaller window.
