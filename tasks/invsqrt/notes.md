@@ -379,11 +379,29 @@ The model reproduces the public notebooks' own worst-case figures (0.928 / 0.945
 
 M4 is **12.54× below the baseline** and within the public band (Alex Chilton v6 reports 165,026 at 93 qubits /
 1,470 Toffolis; our executed count is 1,465 but our rotation eps is smaller, so C is 1,780 vs their ≈ 1,775).
-Static per-stage Toffolis of M4 (`analyze_reference.py`, depth 1): normalise 105, lookup 254, phase_high 46,
-erase_high 15, inner rows 2 × 88, merge 2 × 6, outer rows 2 × 280, phase_low 143, unlookup 25, un-normalise
-~90 static (≈ 79 executed: the flag fixups run on half the shots).
+Static per-stage Toffolis of M4 (`analyze_reference.py`, depth 1; total 1,476 static = 1,096 CCX + 380 CSWAP,
+1,465.0 executed): normalise 105 (26 flag ANDs + 79 CSWAP), lookup 254, phase_high 66 (10 temp-AND + 56 CSWAP),
+erase_high 25, inner rows 174 (2 × 87), merge 12, outer rows 560 (2 × 280), phase_low 154 (10 + 144), unlookup
+25, un-normalise 101 static (22 fixup ANDs run on half the shots → ≈ 90 executed). Rotations: 44 × 28.65 T =
+1,261 T = 315 Toffoli-equivalents, 17.7 % of C — the second-largest item after the outer rows.
 
 Where the 93 qubits sit at the two peaks: outer rows = x 22 + flags 5 + c2 8 + resid 12 + coarse 7 + L 21 +
 17 carries (18 needed, one borrowed from x[21]) = 92 + lookup/ext slack → 93; high-word phase = 22 + 5 + 8 + 12
 + 7 + 21 + H 8 + ext 10 = 93. The idle c2 (8) during the outer rows is the only slack, and releasing it costs a
 re-lookup (+254 Toffolis). Next ideas of our own are listed in §11.
+
+## 11. Where the remaining cost sits (M4) and our own levers to try
+
+| item | Toffoli-eq | share of C 1,780 | lever |
+|---|---|---|---|
+| outer rows (14 × 20, both directions) | 560 | 31 % | width of L (21) is set by the per-segment range of Q = R·u; LB = 20 needs 256 segments per parity (lookup +256) — no |
+| rotations (44) | 315 | 18 % | joining the words gives 33 rotations (−75) but +8 Q (+8.6 %) — no; GY = 3 saves one rotation if the model still passes; a fit that maximises the *absolute* margin at s = 0 (large x) raises eps ≈ 4× → ≈ −13 |
+| lookup + unlookups | 304 | 17 % | 2^k − 2 is fixed by 8 address bits; QROAM trades ≥ 56 qubits for ≈ 14 Toffolis — no |
+| normalise / un-normalise | 105 + 90 | 11 % | shared prefix-AND chain (Alex: −6); the 79 CSWAP shifts per direction cannot use temp-AND moves because the destinations are only zero when the flag is set (the reset inside `init_and` would randomise the phase otherwise) |
+| phase shifts (two words) | 220 | 12 % | temp-AND moves already applied; the 10 ext qubits per word are the price of the shift; a right-shift formulation does not change the count |
+| inner rows + merge | 186 | 10 % | residual width 12 → 11 if every segment's R range fits (model assert); each bit saves 8 Toffolis per direction and 1 qubit |
+
+Q = 93 is reached at two points (outer rows: 22 + 5 + 8 + 12 + 7 + 21 + 17 carries + 1 slack; high-word phase:
+22 + 5 + 8 + 12 + 7 + 21 + 8 + 10). The only idle register at the outer rows is c2 (8 qubits); freeing it costs a
+re-lookup (+254 Toffolis, +14 %) — not worth 8.6 % of Q. Cheap model experiments queued: GY = 3, RB = 11, and a
+margin-weighted fit; anything structural (fewer rows, fewer rotations) needs an idea the public has not had.
