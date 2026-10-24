@@ -78,7 +78,7 @@ evidence, not identity; `--seed N` overrides for debugging only.
 ```bash
 scripts/verify.sh invsqrt circuits/invsqrt/<file>.kmx            # full run: 200,540,928 shots (~4 min in Docker on M-series)
 scripts/verify.sh invsqrt circuits/invsqrt/<file>.kmx --max-x 4096   # smoke test (<1 s); NOT a reportable score
-scripts/verify.sh dqi     circuits/dqi/<file>.kmb                # 102,400 shots; --max-workers 4 default, ~6 GB RAM each
+scripts/verify.sh dqi     circuits/dqi/<file>.kmb                # 102,400 shots; ~3.5 min with --max-workers 2 (default 4)
 ```
 `scripts/verify.sh` wraps `docker compose run … python <verifier> <circuit> [args]` and saves stdout to `runs/`.
 Output is JSON. PASS → `{"status":"PASS","score":…,"num_qubits":…,"toffoli_count":…,` plus for invsqrt
@@ -90,8 +90,9 @@ Output is JSON. PASS → `{"status":"PASS","score":…,"num_qubits":…,"toffoli
 better); the leaderboard number is `(∏ baseline/score)^(1/3)` across the three tasks.
 **invsqrt baseline, full official run, 2026-10-23: score 2,076,774.23** (Q=260, C=7,987.59, rotation_eps 1.53e-12,
 worst error/tol 0.477 at x=2,588,411; 4 min 9 s on an M-series Mac). Raw JSON: `runs/invsqrt_baseline_full.json`.
-This is the denominator for every invsqrt improvement. TODO: run the dqi baseline once (needs ~24 GB RAM at
-`--max-workers 4`; use `--max-workers 1` if Docker's memory limit is lower) and record it here the same way.
+**dqi baseline, full official run, 2026-10-23: score 24,439,463,583,672.93 (2.444e13)** (Q=1,893, T=5,725,108.38 mean
+executed vs 5,725,461 static, 0/102,400 failures → ε⁺=8.66e-4, R=1.19126; 3 min 26 s, `--max-workers 2`, <2 GB RSS).
+Raw JSON: `runs/dqi_baseline_full.json`. These two scores are the denominators for every improvement.
 Useful kickmix-native checks (confirmed APIs) that are NOT the verifier:
 ```python
 import kickmix as km
