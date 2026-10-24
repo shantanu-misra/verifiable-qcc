@@ -154,7 +154,7 @@ regenerates the file byte-for-byte.
 | v9 | + live ladders in the BM recursion | 871,064 | 1,916 | rejected: Q² loss exceeds the T gain |
 | v10 | v8 + two-copy B-slot selection | 875,264 | 1,886 | **full PASS with 1 value error**: score 3.7254e12 (6.56×), T 875,169.7, R 1.1967 — `runs/dqi_3725395305991_c3edfdbf_full.json`. The failing shot (replayed with `build/find_failing_shot.py`) has BM history `… z z L n1 n2 n3 …`: two consecutive zero discrepancies then a length change with shift j = 3, the accepted class outside the j ≤ 2 quotient recursion (≈ 3.6e-6/shot, 0.37 expected per 102,400). Extending the recursion to j = 3 would cost ≈ 42k Toffolis (4.8 %) to save 0.17 % of R: not worth it. |
 | v11 | recursion inverse without a kept scaffold (rebuilt to uncompute, +46 Toffolis/inverse, −30 qubits) | 881,284 | **1,856** | **full PASS: score 3.6160e12 (6.76×), T 881,190.1, 0/0** — `runs/dqi_3616031951334_7a56548d_full.json` |
-| v12 | 17-product GF(2⁶) formula found by random search → 51-Toffoli GF(2¹²) products | 846,251 | 1,856 | **full PASS with 1 value error: score 3.4882e12 (7.01×), T 846,160.4, R 1.1967** — `runs/dqi_3488231896097_75a84b53_full.json` (failing shot replayed, see below) |
+| v12 | 17-product GF(2⁶) formula found by random search → 51-Toffoli GF(2¹²) products | 846,251 | 1,856 | **full PASS with 1 value error: score 3.4882e12 (7.01×), T 846,160.4, R 1.1967** — `runs/dqi_3488231896097_75a84b53_full.json` — the failing shot replays as `… z z L n1 n2 n3 …`, the accepted j = 3 class, not a multiplier fault |
 | v13 | ω accumulated in place in S_i (two-product rescaling by σ̃₀ via s⁻¹), no erase-S step | 817,775 | 1,856 | **full PASS: score 3.3554e12 (7.28×), T 817,684.2, 0/0** — `runs/dqi_3355430905041_6ea37ae1_full.json` |
 
 Measured per-pass costs (v1 analyzer, kickmix products at 63): discrepancy 87.8k, update 92.0k, erase_nu 78.1k,
@@ -168,3 +168,15 @@ v9: same for the three zero tests of the quotient recursion; B-slot selection wi
 three (B_k = A1[k] ⊕ f1(A1[k]⊕A1[k+1]) ⊕ f2(A1[k]⊕A1[k+2]), valid because slots below the shift are zero).
 Remaining overhead vs the public BM (≈ 144k): erase_nu 2 × 44k, cswap 2 × 18k, quotient 2 × 9k — the price of the
 role-swap formulation; the products themselves (54/product) are within 6 % of a 51-Toffoli M(6)=17 multiplier.
+
+### Round 2 summary (2026-10-24)
+
+v10 → v13: 875,264 → 817,775 static Toffolis (−6.6 %), Q 1,886 → 1,856 (−1.6 %), verified cost 3.725e12 → 3.355e12
+(−9.9 %; 6.56× → 7.28× below baseline). Rejected: live zero-test ladders inside the BM recursion (v9: −9k Toffolis but
++30 qubits at the peak). Not pursued: Karatsuba short product for ω (superseded by the in-place accumulation), caching
+σ₀⁻¹ across a division (+24 qubits at the peak outweigh the saved inverse), tighter static bounds (+2/+3 margins cover
+one or two mid-run zero discrepancies; a tighter bound would fail ≈ 1e-4 of shots).
+Where the remaining T sits (v13, analyzer): sweep 372,645 (4,095 × 91: zero test 12 + gated tower inverse 79);
+bm_forward 222,294 (discrepancy 71,094, update 74,460, erase_nu 43,120, cswap 18,360, quotient 8,890); bm_reverse
+154,770 (same minus the discrepancy); omega_inplace 34,033 each way. The public circuit's 583k differs mainly in the BM passes (241k vs ≈ 360k): the quotient
+erasure, the role swap and the per-step division are the price of this reversible formulation.
