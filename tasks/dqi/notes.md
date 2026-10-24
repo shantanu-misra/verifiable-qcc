@@ -152,7 +152,7 @@ regenerates the file byte-for-byte.
 
 | v8 | zero-test ladder kept live across the sweep inverse | 880,304 | 1,886 | **full PASS: score 3.7297e12 (6.55×), T 880,209.8, 0/0** — `runs/dqi_3729720521808_0cb5eafc_full.json` |
 | v9 | + live ladders in the BM recursion | 871,064 | 1,916 | rejected: Q² loss exceeds the T gain |
-| v10 | v8 + two-copy B-slot selection | 875,264 | 1,886 | full run in progress |
+| v10 | v8 + two-copy B-slot selection | 875,264 | 1,886 | **full PASS with 1 value error**: score 3.7254e12 (6.56×), T 875,169.7, R 1.1967 — `runs/dqi_3725395305991_c3edfdbf_full.json`. The failing shot (replayed with `build/find_failing_shot.py`) has BM history `… z z L n1 n2 n3 …`: two consecutive zero discrepancies then a length change with shift j = 3, the accepted class outside the j ≤ 2 quotient recursion (≈ 3.6e-6/shot, 0.37 expected per 102,400). Extending the recursion to j = 3 would cost ≈ 42k Toffolis (4.8 %) to save 0.17 % of R: not worth it. |
 
 Measured per-pass costs (v1 analyzer, kickmix products at 63): discrepancy 87.8k, update 92.0k, erase_nu 78.1k,
 cswap 31.1k, quotient 26.5k; omega swap 79.7k forward / 40.0k reverse.
