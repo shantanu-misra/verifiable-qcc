@@ -147,3 +147,94 @@ If #1 stalls, #5 + #6 + #4 + #3 + #2 + #7 on the reference architecture are wort
 * Rotation cost is only 3 % of C; do not spend Toffolis to save rotations unless the trade is < 6.8 Toffolis each.
 * Smoke-test with `scripts/verify.sh invsqrt <file> --max-x 4096` (seconds), then the full run (~4 min); only the
   full run's `score` may be quoted.
+
+## 6. Candidate #1 classical model (2026-10-23)
+
+`tasks/invsqrt/model_pwquad.py` is the fixed-point model of the QROM-indexed piecewise polynomial: same
+normalisation as the reference, address = top k bits of `x_norm`, `delta` = the remaining `22 − k` bits truncated
+to `d`, Horner with the reference's `_add_row` semantics (one row per `delta` bit, each row floored to the output
+LSB, rows summed, then `isub` from the accumulator, so candidate #7's sign handling is built in and there is no
+`correct` stage), `p ≈ 2/√M` with `wp` fractional bits, `y1 = p << s mod 2^F`, `F = wp + 11`. Coefficients are
+integers fitted **per piece for minimax relative error of the fixed-point pipeline itself** (greedy integer local
+search seeded by a Chebyshev interpolant, `c0` re-optimised exactly each step), on the 2,350,089 `x_norm` values
+that actually occur. Errors are measured against the verifier's own `reference_values` (target and tol in 2^-64
+turns), i.e. the exact pass/fail test; fed the reference pipeline's `y1`, the same code reproduces the verified
+worst case 0.4769 at x = 2,588,411 to four digits. Full sweep over all 3,133,452 x: ~8 s per configuration in Docker.
+
+Static cost columns use the measured primitives of §2 (lookup `2^k − 2` + `del_lookup`, rows = ANDs + adder
+length − 1, both directions), plus normalize 230, denormalize 600 (unary) or 320 (barrel, candidate #3) and
+6.8 Toffoli-eq per rotation. Q = x 22 + y1 F + flags 10 + c2 (wc) + c1/r1 (wc+1) + scratch (wp+1) + carries (wp)
++ lookup workspace k, with no id aliasing. **Estimates, not verifier output.**
+
+| deg | k | wc | wp | d | max err/tol | worst x | frac > 0.5 | frac > 0.8 | Toff/dir (ANDs+adds+lookup) | n_rot | Q est | C est unary / barrel | Q·C est (barrel) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2 | 8 | 28 | 29 | 14 | 0.688 | 1 | 0.0092 | 0 | 1511 (434+798+279) | 37 | 196 | 4,104 / 3,824 | 7.5e5 |
+| 2 | 8 | 26 | 29 | 14 | 0.682 | 1,052,655 | 0.0094 | 0 | 1,455 | 37 | 192 | 3,992 / 3,712 | 7.1e5 |
+| 2 | 8 | 24 | 29 | 14 | 0.682 | 1,052,655 | 0.0093 | 0 | 1,399 | 37 | 188 | 3,880 / 3,600 | 6.8e5 |
+| 2 | 8 | 22 | 29 | 14 | 0.682 | 1,052,655 | 0.0087 | 0 | 1,343 | 37 | 184 | 3,768 / 3,488 | 6.4e5 |
+| 2 | 8 | 20 | 29 | 14 | 0.759 | 263,152 | 0.0133 | 0 | 1,261 | 37 | 180 | 3,604 / 3,324 | 6.0e5 |
+| 2 | 8 | 18 | 29 | 14 | **2.130 ✗** | 936,961 | 0.33 | 0.12 | 1,160 | 37 | 176 | — | — |
+| 2 | 8 | 24 | 28 | 14 | 0.750 | 1 | 0.0103 | 0 | 1,371 | 36 | 185 | 3,817 / 3,537 | 6.5e5 |
+| **2** | **8** | **22** | **28** | **14** | **0.735** | 263,159 | 0.0104 | 0 | **1315 (336+700+279)** | 36 | **181** | **3,705 / 3,425** | **6.2e5** |
+| 2 | 8 | 20 | 28 | 14 | 0.761 | 1,068,414 | 0.0103 | 0 | 1237 (307+651+279) | 36 | 177 | 3,549 / 3,269 | 5.8e5 |
+| 2 | 8 | 22 | 30 | 14 | 0.653 | 66,559 | 0.0081 | 0 | 1,369 | 38 | 187 | 3,826 / 3,546 | 6.6e5 |
+| 2 | 8 | 20 | 30 | 14 | 0.764 | 1,060,863 | 0.0126 | 0 | 1,283 | 38 | 183 | 3,654 / 3,374 | 6.2e5 |
+| 2 | 8 | 24 | 29 | **13** | **4.65 ✗** | 1,052,637 | 0.89 | 0.89 | 1,332 | 37 | 188 | — | — |
+| 2 | 8 | 22 | 29 | **12** | **12.6 ✗** | 1 | 0.89 | 0.89 | 1,215 | 37 | 184 | — | — |
+| 2 | 9 | 24 | 29 | 13 | 0.141 | 1 | 0 | 0 | 1578 (338+689+551) | 37 | 189 | 4,238 / 3,958 | 7.5e5 |
+| 2 | 9 | 22 | 29 | 13 | 0.141 | 1 | 0 | 0 | 1,526 | 37 | 185 | 4,134 / 3,854 | 7.1e5 |
+| 2 | 9 | 20 | 29 | 13 | 0.289 | 935,935 | 0 | 0 | 1,452 | 37 | 181 | 3,986 / 3,706 | 6.7e5 |
+| 2 | 9 | 18 | 29 | 13 | 0.899 (**r1 overflow**) | 2,152,451 | 0.024 | 1.4e-4 | 1,359 | 37 | 177 | — | — |
+| 2 | 9 | 22 | 28 | 13 | 0.256 | 3,116,927 | 0 | 0 | 1,500 | 36 | 182 | 4,075 / 3,795 | 6.9e5 |
+| 2 | 9 | 20 | 28 | 13 | 0.275 | 2,835,199 | 0 | 0 | 1428 (273+604+551) | 36 | 178 | 3,931 / 3,651 | 6.5e5 |
+| 2 | 9 | 22 | 29 | **12** | **4.13 ✗** | 1,050,621 | 0.89 | 0.89 | 1,463 | 37 | 185 | — | — |
+| 2 | 7 | 26 | 29 | 15 | **4.86 ✗** | 1 | 0.35 | 0.24 | 1,418 | 37 | 191 | — | — |
+| 2 | 7 | 26 | 31 | 15 | **4.81 ✗** | 1 | 0.35 | 0.24 | 1,478 | 39 | 197 | — | — |
+| 3 | 6 | 28 | 29 | 16 | 0.560 | 1,059,583 | 0.0010 | 0 | 2224 (792+1360+72) | 37 | 223 | 5,530 / 5,250 | 1.17e6 |
+| 3 | 6 | 24 | 29 | 16 | 0.591 | 1,114,033 | 0.0009 | 0 | 1,968 | 37 | 211 | 5,018 / 4,738 | 1.0e6 |
+| 3 | 6 | 22 | 29 | 16 | 0.938 | 1,114,043 | 0.031 | 3e-4 | 1,834 | 37 | 205 | 4,750 / 4,470 | 9.2e5 |
+| 3 | 6 | 22 | 29 | **15** | **4.70 ✗** | 1,114,042 | 0.89 | 0.89 | 1,746 | 37 | 205 | — | — |
+| 3 | 7 | 24 | 29 | 15 | 0.173 | 843,514 | 0 | 0 | 1,898 | 37 | 212 | 4,878 / 4,598 | 9.7e5 |
+| 3 | 7 | 22 | 29 | 15 | 0.395 | 59,834 | 0 | 0 | 1,776 | 37 | 206 | 4,634 / 4,354 | 9.0e5 |
+| 3 | 5 | 26 | 29 | 17 | **7.08 ✗** | 1 | 0.34 | 0.25 | 2,212 | 37 | 216 | — | — |
+
+(Full output with all 35 rows: `tasks/invsqrt/pwquad_results.md`; coefficient tables for the three recommended
+configurations are in `tasks/invsqrt/pwquad_tables/`, the rest regenerate in minutes with `model_pwquad.py --configs …`.)
+
+### Findings
+
+* **Candidate #1 clears the bar.** Degree 2 with k = 8 (192 occurring pieces of the 256 addresses) passes with
+  max err/tol 0.65–0.76 for every intermediate width wc ≥ 20 and result width wp ∈ {28, 29, 30}; no x exceeds
+  0.8 tol and ~1 % exceed 0.5 tol. k = 9 (384 pieces) passes at 0.14–0.29 but the extra 2 × 272 lookup Toffolis
+  cost more than they save in widths. k = 7 and degree 3 at k = 5 fail (float error 2^-24.7 / 2^-25 leaves nothing
+  for truncation). Degree 3 at k = 6–7 passes but costs 1,800–2,200 Toffolis per direction, 40–60 % more than
+  degree 2 / k = 8, and needs ~25 more qubits.
+* **`delta` cannot be truncated**: d must equal 22 − k (every bit of `x_norm` below the address must enter the
+  polynomial). Dropping one bit sends max err/tol to 4.6 and 89 % of x above 0.8 — the missing bit is a 2^-20
+  relative perturbation of M, i.e. 2^-21 of 1/√M, far above 2^-24. (The reference gets away with 14 of 20 delta
+  bits only because Newton squares the error away.)
+* **The intermediate width is the knob**: wc = 22 → 20 saves ~80 Toffolis per direction and 4 qubits for +0.03–0.08
+  of tolerance; wc = 18 fails (2.13) and wc = 18 at k = 9 overflows the r1 register. wp = 28 instead of 29 saves one
+  rotation (6.8 Toffoli-eq) and 28 Toffolis per direction for +0.05 of tolerance.
+* **Where the margin goes**: the float quadratic error at k = 8 is 2^-27.7 (≈ 0.08 tol); the rest of the 0.68–0.76
+  is the floor-per-row truncation noise of 14 rows (±7 ulp of 2^-wp ≈ 2^-26 ≈ 0.25 tol at wp = 29) plus r1's
+  truncation damped by delta ≤ 2^-6. Rounding instead of flooring the rows is not available for free in `_add_row`,
+  but the per-piece `c0` already absorbs the mean bias.
+
+### Recommendation: build degree 2, k = 8, wc = 22, wp = 28, d = 14
+
+* Model: max err/tol **0.735** (x = 263,159), 1.0 % of x above 0.5 tol, none above 0.8 — comparable to the
+  reference's 0.477 headroom once rotation synthesis takes its share (eps shrinks by ≈ 2×, ≈ +0.6 T per rotation).
+* Static estimate: 1,315 Toffolis per direction (336 ANDs + 700 adder + 279 lookup incl. del_lookup), 36 rotations, Q ≈ 181 without
+  any id aliasing → **C ≈ 3,700 (unary denormalize) or ≈ 3,425 (barrel), Q·C ≈ 6.2e5–6.7e5, ≈ 3.1–3.3× below
+  the verified baseline 2,076,774**. With candidate #2-style aliasing (c2's 22 ids dead after step 1; y1's upper
+  ids dead until denormalize) Q could approach ~165.
+* Aggressive variant: wc = 20, wp = 28 → 0.761, 1,237/direction, Q ≈ 177. Take it only if the built circuit
+  reproduces the model exactly (it should, as the reference does) and the smoke run shows margin.
+* Safe fallback if the build deviates from the model: k = 9, wc = 20, wp = 28 → 0.275, 1,428/direction, Q ≈ 178
+  (costs ≈ +230 Toffolis total).
+* Build notes: coefficients are `[c0, c1, c2]` per address in `pwquad_tables/deg2_k8_wc22_wp28_d14.json`
+  (c0 in 2^-28 units, 29 bits incl. integer bit; c1 and c2 in 2^-22 units, 22 bits each); load
+  all three with one `init_lookup` (73 output bits, 254 Toffolis), `del_lookup` c2 after step 1, re-`init_lookup`
+  c2 for the uncompute; address = `x[14:22]`, delta rows = `x[0:14]` with weights 2^-7 … 2^-20; `p` lives in the
+  low 29 bits of the 39-bit `y1`; x = 1 wraps `y1` to 0, which is the correct phase mod 1 (model checks this).
