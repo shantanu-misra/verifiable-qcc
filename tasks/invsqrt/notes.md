@@ -296,3 +296,32 @@ and needs its own ancillas, not a clear win.
 | worst err/tol, x | 0.7348, 263,159 | 0.7348, 263,159 |
 | reaction depth / ops | 1,407 / 44,652 | 1,383 / 44,346 |
 | sha256 | d9159333 | 8714272b |
+
+## 9. Candidate #2 built: qubit-id aliasing — `circuits/invsqrt/invsqrt_488144_1b46306c.kmx` (2026-10-24)
+
+`build_pwquad.py` (default on; `--no-alias` restores one id per register). The builder hands freed ids back
+LIFO, so Q = peak simultaneous allocation; the `_Ids` tracker asserts no two live registers ever share an id and
+records the map. Live ranges exploited: scratch is allocated per step at that step's width (22 then 29) and freed
+after it; `c2` is freed after `del_c2` and re-allocated (on other ids) for `relookup_c2`; the top 10 bits of `y1`
+exist only from denormalize to un-denormalize. Allocation map (first id, last id, n): flags 22–31, c2 32–53,
+c1 54–75, p 76–104, scratch1 105–126; then scratch2 and y1_top and the re-allocated c2 reuse 34–53 / 105–126;
+adder carries and lookup workspace are builder-managed and reuse the same pool. Peak live 127 + ~20 transient
+carries/lookup workspace → **Q = 147** (from 171) at identical gates. `--check`: 0 mismatches over all x; the
+default build reproduces sha 1b46306c.
+
+**Official verifier, full 200,540,928-shot run (`runs/invsqrt_488144_1b46306c_full.json`): PASS, score 488,144.07**
+(4.254× below baseline; −14.0 % vs §8, −21.4 % vs §7).
+
+| quantity | §8 | **§9 (aliased)** |
+|---|---|---|
+| score | 567,841.06 | **488,144.07** |
+| Q | 171 | **147** |
+| Toffolis / C | 3,074 / 3,320.71 | 3,074 / 3,320.71 |
+| rotations / eps | 36 / 1.3445e-12 | 36 / 1.3445e-12 |
+| worst err/tol, x | 0.7348, 263,159 | 0.7348, 263,159 |
+| reaction depth / ops | 1,383 / 44,346 | 1,383 / 44,346 |
+| sha256 | 8714272b | 1b46306c |
+
+Remaining Q: x 22 + flags 10 + c1 22 + p 29 = 83 permanent; step-1 peak adds c2 22 + scratch 22 + carries 21.
+Further Q cuts need either a second lookup (load c0 just before step 2, +254 Toffolis/direction, −29 Q during
+step 1 — roughly neutral on Q·C) or a fused controlled adder without the scratch register (candidate #9).

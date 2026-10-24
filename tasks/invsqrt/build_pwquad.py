@@ -134,7 +134,7 @@ class Built:
 
 
 def build(cfg: mp.Config, table: dict[int, list[int]], *, compute_only: bool = False,
-          barrel: bool = True, alias: bool = False) -> Built:
+          barrel: bool = True, alias: bool = True) -> Built:
     """`alias=True` reuses qubit ids across non-overlapping live ranges (candidate #2): scratch is
     allocated per step at the width that step needs, c2 is freed between del_c2 and relookup_c2,
     and the top n_p bits of y1 exist only around denormalize/phase. The builder hands freed ids
@@ -292,10 +292,10 @@ def main() -> None:
     ap.add_argument('--table', default=DEFAULT_TABLE)
     ap.add_argument('--check', action='store_true', help='simulate every x and compare y1 with the model')
     ap.add_argument('--no-barrel', action='store_true', help='unary flag-controlled denormalize (reference style)')
-    ap.add_argument('--alias', action='store_true', help='reuse qubit ids across non-overlapping live ranges (candidate #2)')
+    ap.add_argument('--no-alias', action='store_true', help='keep every register on its own ids (no candidate #2 reuse)')
     args = ap.parse_args()
     cfg, table = load_table(args.table)
-    kw = dict(barrel=not args.no_barrel, alias=args.alias)
+    kw = dict(barrel=not args.no_barrel, alias=not args.no_alias)
     built = build(cfg, table, **kw)
     circuit = built.circuit
     print('allocation history (name, first id, last id, n):', built.ids.history, 'peak live =', built.ids.peak)
