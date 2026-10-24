@@ -112,3 +112,22 @@ Tower arithmetic measured in kickmix: GF(2³) mul 7 / inv 7, GF(2⁴) mul 9 / in
 qubits). GF(2¹²) = GF(2⁶)[u]/(u²+u+ν): inverse = (a+b+bu)·N⁻¹, N = a²+ab+νb²: 1 GF(64) mul + GF(64) inverse
 (via GF(8): 4 GF(8) muls ≈ 28) + 2 GF(64) muls ≈ 91 with kickmix primitives; the basis change is GF(2)-linear (free).
 Field: modulus 0x1053, primitive element 2 (x).
+
+### 4b. Corrections after probing (build/probe_bm*.py)
+
+- The one-XOR recovery of λ only holds for the first no-length-change step of a division; the general rule is the
+  power-series quotient ν_j = [A2/B]_j = (A2[j] ⊕ Σ_{i<j} ν_i B[j−i]) / B[0] (valid for j < m1, the shift at the last
+  length change). Over 4,096 shots every no-change step had j ≤ 2 (the only j ≥ m1 case is the fixed step n = 1, where
+  the "B_old" is the classical initial 1); zero-run ≥ 2 inputs (probability ≈ 4e-6/shot) would be mis-decoded — accepted.
+- L_n ≤ ⌊n/2⌋ + 1 on all 2,048 probed shots → static loop bounds min(35, ⌊n/2⌋ + 2) for the discrepancy/update products.
+- Replacing a syndrome register by its discrepancy breaks BM (0/256), so d must be erased each step (MBUC or ν·b) and
+  recomputed in the reverse pass: reverse ≈ forward in products.
+- Windowed syndrome erasure during BM is impractical: the backward recurrence anchors at C_L ↔ S_{n−L}, a quantum index,
+  while the discrepancy anchors at C_0 ↔ S_n; no single layout aligns both classically. Peak live set = S 70 + C 36 +
+  B 35 = 141 slots ≈ 1,692 qubits + scratch: **Q ≈ 1,800 is structural for BM/EEA**, matching the public circuit.
+- ω: computed from σ and S_1..S_35, which are then erased via S_i = σ_0⁻¹(ω_{i−1} ⊕ Σ_k σ_k S_{i−k}) (classical alignment),
+  so the sweep's live set is S_36..S_70 + σ + B + ω = 141 slots too. Horiguchi–Koetter (e_j ∝ 1/(B(X_j⁻¹)σ'(X_j⁻¹)))
+  would avoid ω but costs an extra product per position (+217k) vs ω's 2 × 630 products (154k): not worth it.
+
+v1 plan: kickmix primitives everywhere (63/product, 315/inverse) to get a verified circuit first; then tower inverse in the
+sweep, own Karatsuba multiplier, tighter scratch.
