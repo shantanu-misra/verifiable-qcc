@@ -8,6 +8,9 @@ services:
     working_dir: /work
     volumes:
       - .:/work
+      # Competition data is gitignored; a git worktree can point here at the main checkout's copy
+      # by putting VQCC_DATA=/abs/path/to/verifiable-qcc/data in a (gitignored) .env file.
+      - ${VQCC_DATA:-./data}:/work/data
       - ${HOME}/.kaggle:/root/.kaggle:ro
     environment:
       - PYTHONPATH=/work

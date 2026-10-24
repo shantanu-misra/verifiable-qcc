@@ -1,6 +1,8 @@
 # Kaggle competition data (Apache 2.0, but large and redistributable only via Kaggle)
 data/
 *.zip
+# per-checkout compose settings (e.g. VQCC_DATA for worktrees)
+.env
 
 # Python
 __pycache__/
