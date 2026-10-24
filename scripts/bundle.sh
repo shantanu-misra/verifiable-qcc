@@ -11,7 +11,9 @@ cd "$(dirname "$0")/.."
 
 invsqrt="${1:?invsqrt circuit or 'baseline'}"
 dqi="${2:?dqi circuit or 'baseline'}"
-out="${3:-submissions/submission_$(date -u +%Y%m%dT%H%M%SZ).zip}"
+out="${3:-submissions/submission.zip}"
+stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+side="${out%.zip}_${stamp}.txt"   # one record per bundle, even though the zip name is reused
 
 [ "$invsqrt" = baseline ] && invsqrt=data/sample_submission/invsqrt.kmb
 [ "$dqi" = baseline ] && dqi=data/sample_submission/dqi.kmb
@@ -28,9 +30,10 @@ echo "wrote $out"
 unzip -l "$out"
 {
   echo "created_utc: $(date -u +%FT%TZ)"
+  echo "zip: $out  sha256: $(shasum -a 256 "$out" | cut -d' ' -f1)"
   echo "invsqrt: $invsqrt  sha256: $(shasum -a 256 "$invsqrt" | cut -d' ' -f1)"
   echo "dqi:     $dqi  sha256: $(shasum -a 256 "$dqi" | cut -d' ' -f1)"
   echo "dfthcsos: baseline (data/sample_submission/dfthcsos)"
   echo "kaggle_public_score: TODO fill in after upload"
-} > "${out%.zip}.txt"
-echo "sidecar: ${out%.zip}.txt"
+} > "$side"
+echo "sidecar: $side"

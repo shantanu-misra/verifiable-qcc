@@ -1,0 +1,11 @@
+zip: submissions/submission.zip  sha256: 225d0487db4bd0edf333a455dd3e84554581cfa4c8a48fa7d8499d1ac31a6f53
+created_utc: 2026-10-24T02:29:52Z
+invsqrt: circuits/invsqrt/invsqrt_488144_1b46306c.kmx  sha256: b73e716e29d4eb19429561321ae5ad27b438df0d8254eeb3f429259d1be2bf23
+dqi:     data/sample_submission/dqi.kmb  sha256: 959471d05a26373b4f14ca0cae2d8639ea25f18170d9f6532139aa51ccc04995
+dfthcsos: baseline (data/sample_submission/dfthcsos)
+kaggle_public_score: 1.62036 (public LB position 392, uploaded 2026-10-24 as submission.zip; expected 1.6204)
+local_verified (official verifier, this repo's Docker image):
+  invsqrt: score 488,144.07  Q=147 T=3074 C=3320.71  runs/invsqrt_488144_1b46306c_full.json (commit 6641976)
+  dqi:     baseline 24,439,463,583,672.93        runs/dqi_baseline_full.json
+  dfthcsos: baseline unchanged (ratio 1.0)
+expected_leaderboard_score: (2076774.233715282/488144.07179224596)^(1/3) = 1.6204
