@@ -146,8 +146,9 @@ regenerates the file byte-for-byte.
 | v2 | tower inverse GF(2¹²)→GF(2⁶) (126/inverse) | 1,265,164 | 1,885 | **full PASS: score 5.3545e12, T 1,265,001.4, 0/0** |
 | v3 | two-level tower →GF(2³) (91/inverse) | 1,111,969 | 1,885 | **full PASS: score 4.7062e12, T 1,111,842.0, 0/0** |
 | v4 | 54-Toffoli Karatsuba products (gfmul.py) | 990,379 | 1,886 | smoke PASS 0/0 |
-| v5 | recursion temporaries erased by measurement | — | — | building |
-| v6 | 11-Toffoli zero test, inverse gated by the zero flag (no `located` AND) | — | — | — |
+| v5 | recursion temporaries erased by measurement | 967,699 | 1,886 | smoke PASS 0/0 |
+| v6 | 11-Toffoli zero test, inverse gated by the zero flag (no `located` AND) | 933,539 | 1,886 | **full PASS: score 3.9552e12 (6.18×), T 933,432.0, 0/0** — `runs/dqi_3955239639608_7d3775fc_full.json` |
+| v7 | gating pushed down to the GF(2³) inverse (3 Toffolis) | 921,254 | 1,886 | full run in progress |
 
 Measured per-pass costs (v1 analyzer, kickmix products at 63): discrepancy 87.8k, update 92.0k, erase_nu 78.1k,
 cswap 31.1k, quotient 26.5k; omega swap 79.7k forward / 40.0k reverse.
