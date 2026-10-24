@@ -87,3 +87,28 @@ is 71 slots, and S = ω/σ (power series) is recoverable from it, but the forwar
 Erasing syndromes outside BM's 36-wide window via the backward recurrence (needs C_L ≠ 0, true here) costs ≈ L products
 + 1 inversion per step, i.e. doubles forward/reverse T for Q ≈ 1,300–1,400: roughly break-even on Q²T. The win must come
 from a cheaper T per step or a smaller window.
+
+## 4. Design: windowed Berlekamp–Massey (decision 2026-10-24)
+
+Reversibility without junk (checked with `build/probe_bm.py` on 512 shots, 31,759 BM steps): a BM step
+`C ← C ⊕ λ x^m B`, λ = d/b, is undone from the post-state alone. Length change (B ← C_old, b ← d): the new term's top
+lands at index L_new where C_old is zero (15,874/15,878; the rest have deg B < L_prev), so λ = C_new[m]⊕C_old[m] is a
+single XOR and B_old = (C_new ⊕ C_old)/(λ x^m). No length change: λ = C_new[m] ⊕ B[m] when m < m_prev (generic
+alternating pattern: m = 1, m_prev = 2). Reverse BM therefore needs no stored discrepancies and costs about half the
+forward pass (as the public 92k vs 148k suggests).
+
+Window: BM at step n only reads S_{n−L..n}, L ≤ 35, so S_j (j ≤ 35) is dead after step j + 35. Erase it there with the
+backward recurrence S_j = C_L^{-1} Σ_{k<L} C_k S_{j+L−k} (deg C = L always in the model): L−1 products + 1 inversion
++ 1 product ≈ 2.3k Toffolis, 35 erasures per pass. Live state during BM: S window 35 slots + C 36 + B 35 = 106 slots
+(1,272 qubits) + d, b, λ 36 + L, m counters ≈ 12 + inversion scratch ≈ 30 (tower) → **Q ≈ 1,350–1,400**.
+
+Toffoli estimate per pass (kickmix 63/product; Σ_n L_n ≈ 1,209 for k ≈ 31): discrepancies 76k + updates 76k +
+divisions d/b 70 × ~80 (tower) 6k + erasures 35 × 2.3k 80k → forward ≈ 240k; reverse (no discrepancy recompute) ≈ 160k;
+sweep 4,095 × (zero test 11 + tower inverse ≈ 70–90) ≈ 330–410k. **T ≈ 730–810k**, cost ≈ 1.19 × 1,400² × 770k ≈ 1.8e12
+(≈ 13.5× baseline; public 10.6×). Levers after a first verified circuit: own Karatsuba GF(2¹²) multiplier (63 → 54),
+tighter tower inverse (public reports 69), sharing the C_L inverse across erasures.
+
+Tower arithmetic measured in kickmix: GF(2³) mul 7 / inv 7, GF(2⁴) mul 9 / inv 18, GF(2⁶) mul 21 / inv 63 (24 extra
+qubits). GF(2¹²) = GF(2⁶)[u]/(u²+u+ν): inverse = (a+b+bu)·N⁻¹, N = a²+ab+νb²: 1 GF(64) mul + GF(64) inverse
+(via GF(8): 4 GF(8) muls ≈ 28) + 2 GF(64) muls ≈ 91 with kickmix primitives; the basis change is GF(2)-linear (free).
+Field: modulus 0x1053, primitive element 2 (x).
