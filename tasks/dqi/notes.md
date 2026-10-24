@@ -150,5 +150,18 @@ regenerates the file byte-for-byte.
 | v6 | 11-Toffoli zero test, inverse gated by the zero flag (no `located` AND) | 933,539 | 1,886 | **full PASS: score 3.9552e12 (6.18×), T 933,432.0, 0/0** — `runs/dqi_3955239639608_7d3775fc_full.json` |
 | v7 | gating pushed down to the GF(2³) inverse (3 Toffolis) | 921,254 | 1,886 | **full PASS: score 3.9032e12 (6.26×), T 921,150.0, 0/0** — `runs/dqi_3903196955376_bdf68ad7_full.json` |
 
+| v8 | zero-test ladder kept live across the sweep inverse | 880,304 | 1,886 | **full PASS: score 3.7297e12 (6.55×), T 880,209.8, 0/0** — `runs/dqi_3729720521808_0cb5eafc_full.json` |
+| v9 | + live ladders in the BM recursion | 871,064 | 1,916 | rejected: Q² loss exceeds the T gain |
+| v10 | v8 + two-copy B-slot selection | 875,264 | 1,886 | full run in progress |
+
 Measured per-pass costs (v1 analyzer, kickmix products at 63): discrepancy 87.8k, update 92.0k, erase_nu 78.1k,
 cswap 31.1k, quotient 26.5k; omega swap 79.7k forward / 40.0k reverse.
+
+v6 per-stage (analyzer, static): bm_forward 232,326 (discrepancy 75,276, update 78,840, erase_nu 44,170, cswap 18,360,
+quotient 9,310, L/flags 2,660), omega_swap 68,119, sweep 438,165 (107/position = zero test 2 × 11 + gated inverse 85),
+omega_unswap 34,099, bm_reverse 160,830 (no discrepancy: erased by measurement). Public: BM 241k total, sweep 328k.
+v8: the zero-test AND ladder stays live across the inverse so the flag is uncomputed with one Toffoli (−10/position).
+v9: same for the three zero tests of the quotient recursion; B-slot selection with two controlled copies instead of
+three (B_k = A1[k] ⊕ f1(A1[k]⊕A1[k+1]) ⊕ f2(A1[k]⊕A1[k+2]), valid because slots below the shift are zero).
+Remaining overhead vs the public BM (≈ 144k): erase_nu 2 × 44k, cswap 2 × 18k, quotient 2 × 9k — the price of the
+role-swap formulation; the products themselves (54/product) are within 6 % of a 51-Toffoli M(6)=17 multiplier.

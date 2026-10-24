@@ -60,6 +60,31 @@ class BMDecoder:
         else:
             self.b.ixor_gf2_mul(x, y, target=target, field=self.gf, control=control)
 
+    def is_zero_open(self, reg, target):
+        """target ^= (reg == 0) with len(reg) - 1 Toffolis; returns the live AND ladder for `is_zero_close`."""
+        b = self.b
+        n = len(reg)
+        b.x(reg)
+        anc = b.alloc_qubits(n - 2)
+        b.init_and(reg[0], reg[1], anc[0])
+        for i in range(2, n - 1):
+            b.init_and(anc[i - 2], reg[i], anc[i - 1])
+        b.ccx(anc[n - 3], reg[n - 1], target)
+        b.x(reg)
+        return anc
+
+    def is_zero_close(self, reg, target, anc):
+        """Uncompute target (1 Toffoli) and release the ladder (0 Toffolis)."""
+        b = self.b
+        n = len(reg)
+        b.x(reg)
+        b.ccx(anc[n - 3], reg[n - 1], target)
+        for i in range(n - 2, 1, -1):
+            b.del_and(anc[i - 2], reg[i], anc[i - 1])
+        b.del_and(reg[0], reg[1], anc[0])
+        b.free(anc)
+        b.x(reg)
+
     def is_zero(self, reg, target):
         """target ^= (reg == 0) with len(reg) - 1 Toffolis (AND ladder on the inverted bits, uncomputed by measurement)."""
         b = self.b
@@ -171,7 +196,7 @@ class BMDecoder:
             raise ValueError('need at least 5 slots')
         # flags: f0 = A1[0] != 0 ; f1 = A1[0] == 0 & A1[1] != 0 ; f2 = A1[0] == 0 & A1[1] == 0 & A1[2] != 0 ; all & ~wrap
         z0, z1, z2 = b.alloc_qubits(3)
-        self.is_zero(A1[0], z0); self.is_zero(A1[1], z1); self.is_zero(A1[2], z2)
+        self.is_zero(A1[0], z0); self.is_zero(A1[1], z1); self.is_zero(A1[2], z2)   # (live ladders here cost +30 qubits at the Q peak)
         # ok = (not wrap) and (2L > n): a step with 2L <= n and no length change had d = 0 (tail of zero
         # discrepancies, where j >= m1 and the recursion is invalid), so nothing must be XORed into nu there.
         cond = b.alloc_qubits(1)[0]
@@ -188,14 +213,21 @@ class BMDecoder:
         h = b.alloc_qubits(1)[0]
         b.init_and(g, z1, h)                                      # h = z0 & z1 & nw
         b.x(z2); b.init_and(h, z2, f2); b.x(z2)                   # f2 = h & ~z2
-        # selected B[0], B[1], B[2]
+        # selected B[k] = A1[j + k]: slots below j are zero, so B0 = A1[0] + f1 A1[1] + f2 A1[2];
+        # for k >= 1 use B_k = A1[k] + f1 (A1[k] + A1[k+1]) + f2 (A1[k] + A1[k+2]) (two controlled copies each)
         B0, B1, B2 = (b.alloc_qubits(self.deg) for _ in range(3))
-        sel = [(B0, [(f0, A1[0]), (f1, A1[1]), (f2, A1[2])]),
-               (B1, [(f0, A1[1]), (f1, A1[2]), (f2, A1[3])]),
-               (B2, [(f0, A1[2]), (f1, A1[3]), (f2, A1[4])])]
-        for dst, terms in sel:
-            for flag, src in terms:
-                self.ctrl_copy(flag, src, dst)
+        sel = []
+        for k, dst in enumerate((B0, B1, B2)):
+            b.cx(A1[k], dst)
+            terms = []
+            for flag, off in ((f1, 1), (f2, 2)):
+                if k:
+                    b.cx(A1[k], A1[k + off])          # A1[k+off] <- A1[k] + A1[k+off]
+                self.ctrl_copy(flag, A1[k + off], dst)
+                terms.append((flag, A1[k + off], k))
+                if k:
+                    b.cx(A1[k], A1[k + off])
+            sel.append((dst, terms))
         inv, scaffold = self.inv_init(B0)
         q0 = b.alloc_qubits(self.deg); self.xor_prod(A2[0], inv, q0)
         t1 = b.alloc_qubits(self.deg); b.cx(A2[1], t1); self.xor_prod(q0, B1, t1)
@@ -219,7 +251,21 @@ class BMDecoder:
         b.del_gf2_mul(A2[0], inv, target=q0, field=self.gf); b.free(q0)
         self.inv_del(B0, inv, scaffold)
         for dst, terms in sel:
-            self.mbuc_erase_ctrl_copies(dst, terms)
+            k = terms[0][2]
+            for flag, src, _ in terms:
+                if k:
+                    b.cx(A1[k], src)
+            bits = b.alloc_bits(self.deg)
+            b.hmr(dst, bits)
+            for q, bit in zip(A1[k], bits):           # plain copy term
+                b.push_condition(bit); b.z(q); b.pop_condition()
+            for flag, src, _ in terms:
+                for q, bit in zip(src, bits):
+                    b.push_condition(bit); b.cz(flag, q); b.pop_condition()
+            b.free(bits)
+            for flag, src, _ in terms:
+                if k:
+                    b.cx(A1[k], src)
             b.free(dst)
         b.x(z2); b.del_and(h, z2, f2); b.x(z2); b.del_and(g, z1, h)
         b.x(z1); b.del_and(g, z1, f1); b.x(z1); b.del_and(z0, nw, g)
@@ -382,7 +428,7 @@ class BMDecoder:
                 b.cx(A2[1], A2[0])
                 for r in W[1:]:
                     b.cx(r, W[0])
-                self.is_zero(A2[0], z)
+                ladder = self.is_zero_open(A2[0], z)
                 if self.tower is not None:
                     inv, sc = self.tower.init_inverse_with_scaffold(b, A2[1], gate=z)   # z / T
                 else:
@@ -397,7 +443,7 @@ class BMDecoder:
                 if j % order:
                     b.gf2_idiv(gf.pow(alpha, (-j) % order), target=inv, field=gf)
                 self.inv_del(A2[1], inv, sc)
-                self.is_zero(A2[0], z)
+                self.is_zero_close(A2[0], z, ladder)
                 for r in W[1:]:
                     b.cx(r, W[0])
                 b.cx(A2[1], A2[0])
