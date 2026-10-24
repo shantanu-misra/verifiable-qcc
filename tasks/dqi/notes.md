@@ -154,7 +154,7 @@ regenerates the file byte-for-byte.
 | v9 | + live ladders in the BM recursion | 871,064 | 1,916 | rejected: Q² loss exceeds the T gain |
 | v10 | v8 + two-copy B-slot selection | 875,264 | 1,886 | **full PASS with 1 value error**: score 3.7254e12 (6.56×), T 875,169.7, R 1.1967 — `runs/dqi_3725395305991_c3edfdbf_full.json`. The failing shot (replayed with `build/find_failing_shot.py`) has BM history `… z z L n1 n2 n3 …`: two consecutive zero discrepancies then a length change with shift j = 3, the accepted class outside the j ≤ 2 quotient recursion (≈ 3.6e-6/shot, 0.37 expected per 102,400). Extending the recursion to j = 3 would cost ≈ 42k Toffolis (4.8 %) to save 0.17 % of R: not worth it. |
 | v11 | recursion inverse without a kept scaffold (rebuilt to uncompute, +46 Toffolis/inverse, −30 qubits) | 881,284 | **1,856** | **full PASS: score 3.6160e12 (6.76×), T 881,190.1, 0/0** — `runs/dqi_3616031951334_7a56548d_full.json` |
-| v12 | 17-product GF(2⁶) formula found by random search → 51-Toffoli GF(2¹²) products | 846,251 | 1,856 | full run in progress |
+| v12 | 17-product GF(2⁶) formula found by random search → 51-Toffoli GF(2¹²) products | 846,251 | 1,856 | **full PASS with 1 value error: score 3.4882e12 (7.01×), T 846,160.4, R 1.1967** — `runs/dqi_3488231896097_75a84b53_full.json` (failing shot replayed, see below) |
 | v13 | ω accumulated in place in S_i (two-product rescaling by σ̃₀ via s⁻¹), no erase-S step | — | — | building |
 
 Measured per-pass costs (v1 analyzer, kickmix products at 63): discrepancy 87.8k, update 92.0k, erase_nu 78.1k,
