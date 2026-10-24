@@ -1,0 +1,20 @@
+# Kaggle competition data (Apache 2.0, but large and redistributable only via Kaggle)
+data/
+*.zip
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+build/
+python_build_kickmix/
+wheelhouse/
+
+# Bazel
+bazel-*
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/

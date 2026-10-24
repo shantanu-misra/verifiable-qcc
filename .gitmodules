@@ -1,0 +1,3 @@
+[submodule "third_party/Qualtran"]
+	path = third_party/Qualtran
+	url = https://github.com/quantumlib/Qualtran

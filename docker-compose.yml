@@ -1,0 +1,15 @@
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    platform: linux/amd64
+    image: verifiable-qcc:dev
+    working_dir: /work
+    volumes:
+      - .:/work
+      - ${HOME}/.kaggle:/root/.kaggle:ro
+    environment:
+      - PYTHONPATH=/work
+    stdin_open: true
+    tty: true
