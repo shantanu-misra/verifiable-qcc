@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import kickmix as km
 
+from gfmul import GFMul
+from tower import Tower12
+
 
 class BMDecoder:
     def __init__(self, builder: km.CircuitBuilder, n: int, field: km.GF2Field, m_positions: int):
@@ -21,6 +24,8 @@ class BMDecoder:
         self.deg = field.degree
         self.m = m_positions
         self.slots = self.t + 1  # C has degree <= t
+        self.tower = Tower12() if self.deg == 12 else None
+        self.mul = GFMul(field) if self.deg in (3, 6, 12) else None
 
     # ---- helpers -------------------------------------------------------------------------------
     def disc_bound(self, n: int) -> int:
@@ -35,11 +40,43 @@ class BMDecoder:
         """Highest slot that can be nonzero in A1 or A2 at a length change at step n."""
         return max(self.disc_bound(n), self.upd_bound(n))
 
+    def inv_init(self, x):
+        """(inv, scaffold) with inv = x^-1 (0 -> 0); tower-field version for GF(2^12), kickmix otherwise."""
+        if self.tower is not None:
+            return self.tower.init_inverse_with_scaffold(self.b, x)
+        return self.b.init_gf2_inverse_with_scaffold(x, field=self.gf)
+
+    def inv_del(self, x, inv, scaffold):
+        if self.tower is not None:
+            self.tower.del_inverse_with_scaffold(self.b, x, target=inv, scaffold=scaffold)
+            self.b.free(inv)
+        else:
+            self.b.del_gf2_inverse_with_scaffold(x, target=inv, scaffold=scaffold, field=self.gf)
+            self.b.free(scaffold); self.b.free(inv)
+
     def xor_prod(self, x, y, target, control=True):
-        self.b.ixor_gf2_mul(x, y, target=target, field=self.gf, control=control)
+        if self.mul is not None and control is True:
+            self.mul.ixor_mul(self.b, x, y, target)
+        else:
+            self.b.ixor_gf2_mul(x, y, target=target, field=self.gf, control=control)
 
     def is_zero(self, reg, target):
-        self.b.flip_if_equal(reg, 0, target=target)
+        """target ^= (reg == 0) with len(reg) - 1 Toffolis (AND ladder on the inverted bits, uncomputed by measurement)."""
+        b = self.b
+        n = len(reg)
+        if n < 3:
+            b.flip_if_equal(reg, 0, target=target); return
+        b.x(reg)
+        anc = b.alloc_qubits(n - 2)
+        b.init_and(reg[0], reg[1], anc[0])
+        for i in range(2, n - 1):
+            b.init_and(anc[i - 2], reg[i], anc[i - 1])
+        b.ccx(anc[n - 3], reg[n - 1], target)
+        for i in range(n - 2, 1, -1):
+            b.del_and(anc[i - 2], reg[i], anc[i - 1])
+        b.del_and(reg[0], reg[1], anc[0])
+        b.free(anc)
+        b.x(reg)
 
     def ctrl_copy(self, flag, src, dst):
         """dst ^= flag & src (12 Toffolis), MBUC-erasable via `unctrl_copy`."""
@@ -159,7 +196,7 @@ class BMDecoder:
         for dst, terms in sel:
             for flag, src in terms:
                 self.ctrl_copy(flag, src, dst)
-        inv, scaffold = b.init_gf2_inverse_with_scaffold(B0, field=self.gf)
+        inv, scaffold = self.inv_init(B0)
         q0 = b.alloc_qubits(self.deg); self.xor_prod(A2[0], inv, q0)
         t1 = b.alloc_qubits(self.deg); b.cx(A2[1], t1); self.xor_prod(q0, B1, t1)
         if n == 1:
@@ -170,20 +207,17 @@ class BMDecoder:
             b.x(t2[0])          # first division with S_1 = 0: X = x^2, X[2] = 1
         q2 = b.alloc_qubits(self.deg); self.xor_prod(t2, inv, q2)
         self.ctrl_copy(f0, q0, nu); self.ctrl_copy(f1, q1, nu); self.ctrl_copy(f2, q2, nu)
-        # uncompute
+        # uncompute: products by measurement (del_gf2_mul), copy-plus-products by HMR + Z/CZ fixups (0 Toffolis)
         b.del_gf2_mul(t2, inv, target=q2, field=self.gf); b.free(q2)
-        self.xor_prod(q1, B1, t2); self.xor_prod(q0, B2, t2)
         if n == 3:
             b.x(t2[0])
-        b.cx(A2[2], t2); b.free(t2)
+        self.mbuc_erase_sum_of_products(t2, [(q0, B2), (q1, B1), (A2[2], None)]); b.free(t2)
         b.del_gf2_mul(t1, inv, target=q1, field=self.gf); b.free(q1)
-        self.xor_prod(q0, B1, t1)
         if n == 1:
             b.x(t1[0])
-        b.cx(A2[1], t1); b.free(t1)
+        self.mbuc_erase_sum_of_products(t1, [(q0, B1), (A2[1], None)]); b.free(t1)
         b.del_gf2_mul(A2[0], inv, target=q0, field=self.gf); b.free(q0)
-        b.del_gf2_inverse_with_scaffold(B0, target=inv, scaffold=scaffold, field=self.gf)
-        b.free(scaffold); b.free(inv)
+        self.inv_del(B0, inv, scaffold)
         for dst, terms in sel:
             self.mbuc_erase_ctrl_copies(dst, terms)
             b.free(dst)
@@ -214,11 +248,10 @@ class BMDecoder:
                     b.cswap(lc, self.A1[i], self.A2[i])
                 b.cswap(lc, d, self.breg)
             with b.mark('quotient'):
-                binv, sc = b.init_gf2_inverse_with_scaffold(self.breg, field=self.gf)
+                binv, sc = self.inv_init(self.breg)
                 nu = b.alloc_qubits(self.deg)
                 self.xor_prod(d, binv, nu)
-                b.del_gf2_inverse_with_scaffold(self.breg, target=binv, scaffold=sc, field=self.gf)
-                b.free(sc); b.free(binv)
+                self.inv_del(self.breg, binv, sc)
             with b.mark('update'):
                 for i in range(self.upd_bound(n) + 1):
                     self.xor_prod(nu, self.A1[i], self.A2[i])
@@ -266,10 +299,9 @@ class BMDecoder:
                 for i in range(self.upd_bound(n) + 1):
                     self.xor_prod(nu, self.A1[i], self.A2[i])
             with b.mark('quotient'):
-                binv, sc = b.init_gf2_inverse_with_scaffold(self.breg, field=self.gf)
+                binv, sc = self.inv_init(self.breg)
                 self.xor_prod(d, binv, nu)
-                b.del_gf2_inverse_with_scaffold(self.breg, target=binv, scaffold=sc, field=self.gf)
-                b.free(sc); b.free(binv)
+                self.inv_del(self.breg, binv, sc)
             b.free(nu)
             with b.mark('cswap'):
                 b.cswap(lc, d, self.breg)
@@ -305,27 +337,25 @@ class BMDecoder:
     def omega_swap_forward(self, S):
         b, t = self.b, self.t
         with b.mark('omega_swap'):
-            inv0, sc = b.init_gf2_inverse_with_scaffold(self.A2[0], field=self.gf)
+            inv0, sc = self.inv_init(self.A2[0])
             for i in range(t - 1, -1, -1):
                 w = self.Wtmp if i == t - 1 else S[i + 1]
                 for k in range(i + 1):
                     self.xor_prod(self.A2[k], S[i - k], w)       # w = omega_i
                 self._erase_S(i, S, w, inv0)
             b.swap(self.Wtmp, S[0])                               # omega_{t-1} -> S[0]'s qubits
-            b.del_gf2_inverse_with_scaffold(self.A2[0], target=inv0, scaffold=sc, field=self.gf)
-            b.free(sc); b.free(inv0)
+            self.inv_del(self.A2[0], inv0, sc)
 
     def omega_swap_reverse(self, S):
         b, t = self.b, self.t
         with b.mark('omega_unswap'):
-            inv0, sc = b.init_gf2_inverse_with_scaffold(self.A2[0], field=self.gf)
+            inv0, sc = self.inv_init(self.A2[0])
             b.swap(self.Wtmp, S[0])
             for i in range(t):
                 w = self.Wtmp if i == t - 1 else S[i + 1]
                 self._erase_S(i, S, w, inv0)                      # restores S[i]
                 self.mbuc_erase_sum_of_products(w, self.omega_pairs(i, S))
-            b.del_gf2_inverse_with_scaffold(self.A2[0], target=inv0, scaffold=sc, field=self.gf)
-            b.free(sc); b.free(inv0)
+            self.inv_del(self.A2[0], inv0, sc)
 
     # ---- Chien search + Forney phase kickback -------------------------------------------------------
     def sweep(self, E):
@@ -353,15 +383,20 @@ class BMDecoder:
                 for r in W[1:]:
                     b.cx(r, W[0])
                 self.is_zero(A2[0], z)
-                inv, sc = b.init_gf2_inverse_with_scaffold(A2[1], field=gf)   # 1 / T,  sigma'(X_j^-1) = alpha^j T
+                if self.tower is not None:
+                    inv, sc = self.tower.init_inverse_with_scaffold(b, A2[1], gate=z)   # z / T
+                else:
+                    inv, sc = self.inv_init(A2[1])
                 b.gf2_imul(gf.pow(alpha, (-j) % order), target=inv, field=gf) if j % order else None
-                b.init_and(z, W[0], located)
-                b.gf2_phase_by_product(located, inv, mask=E[j], field=gf)
-                b.del_and(z, W[0], located)
+                if self.tower is not None:
+                    b.gf2_phase_by_product(W[0], inv, mask=E[j], field=gf)
+                else:
+                    b.init_and(z, W[0], located)
+                    b.gf2_phase_by_product(located, inv, mask=E[j], field=gf)
+                    b.del_and(z, W[0], located)
                 if j % order:
                     b.gf2_idiv(gf.pow(alpha, (-j) % order), target=inv, field=gf)
-                b.del_gf2_inverse_with_scaffold(A2[1], target=inv, scaffold=sc, field=gf)
-                b.free(sc); b.free(inv)
+                self.inv_del(A2[1], inv, sc)
                 self.is_zero(A2[0], z)
                 for r in W[1:]:
                     b.cx(r, W[0])

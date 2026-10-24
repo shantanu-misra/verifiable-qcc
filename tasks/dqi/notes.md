@@ -131,3 +131,23 @@ Field: modulus 0x1053, primitive element 2 (x).
 
 v1 plan: kickmix primitives everywhere (63/product, 315/inverse) to get a verified circuit first; then tower inverse in the
 sweep, own Karatsuba multiplier, tighter scratch.
+
+## 5. Build log (Phase 3)
+
+Generator `build_bm.py` (+ `tower.py`, `gfmul.py`). Toy instances GF(2⁴) n=8 m=15 and GF(2⁶) n=12 m=63 are checked
+end to end against the classical phase parity (`build/test_full.py`, 0 errors). Full-scale circuits are ≈ 420–440 MB `.kmb`
+(42–58 M instructions), so they are kept out of git (`circuits/dqi/.gitignore`); the generator and the verifier JSON
+(with the circuit's sha256) are the committed evidence, and `python tasks/dqi/build_bm.py circuits/dqi/<name>.kmb`
+regenerates the file byte-for-byte.
+
+| version | change | static Toffolis | Q | official run |
+|---|---|---|---|---|
+| v1 | kickmix primitives only | 2,092,417 | 1,903 | smoke 2,560 shots PASS, 0/0 errors |
+| v2 | tower inverse GF(2¹²)→GF(2⁶) (126/inverse) | 1,265,164 | 1,885 | **full PASS: score 5.3545e12, T 1,265,001.4, 0/0** |
+| v3 | two-level tower →GF(2³) (91/inverse) | 1,111,969 | 1,885 | **full PASS: score 4.7062e12, T 1,111,842.0, 0/0** |
+| v4 | 54-Toffoli Karatsuba products (gfmul.py) | 990,379 | 1,886 | smoke PASS 0/0 |
+| v5 | recursion temporaries erased by measurement | — | — | building |
+| v6 | 11-Toffoli zero test, inverse gated by the zero flag (no `located` AND) | — | — | — |
+
+Measured per-pass costs (v1 analyzer, kickmix products at 63): discrepancy 87.8k, update 92.0k, erase_nu 78.1k,
+cswap 31.1k, quotient 26.5k; omega swap 79.7k forward / 40.0k reverse.
