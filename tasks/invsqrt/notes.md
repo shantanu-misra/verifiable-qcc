@@ -405,3 +405,8 @@ Q = 93 is reached at two points (outer rows: 22 + 5 + 8 + 12 + 7 + 21 + 17 carri
 22 + 5 + 8 + 12 + 7 + 21 + 8 + 10). The only idle register at the outer rows is c2 (8 qubits); freeing it costs a
 re-lookup (+254 Toffolis, +14 %) — not worth 8.6 % of Q. Cheap model experiments queued: GY = 3, RB = 11, and a
 margin-weighted fit; anything structural (fewer rows, fewer rotations) needs an idea the public has not had.
+
+Results of the queued experiments (model only, 2026-10-24): GY = 3 → max err/tol 1.142 (FAIL); RB = 11 → segment 128's
+residual range exceeds 11 bits; LB = 20 → segment 0's low register overflows. The M4 widths are the floor of this
+design in every direction we tried; only the margin-weighted fit (≈ −13 Toffoli-eq) and the prefix-flag chain (≈ −6)
+remain as sub-percent items.
