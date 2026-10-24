@@ -228,7 +228,10 @@ class BMDecoder:
                 if k:
                     b.cx(A1[k], A1[k + off])
             sel.append((dst, terms))
-        inv, scaffold = self.inv_init(B0)
+        if self.tower is not None:
+            inv = self.tower.init_inverse_compact(b, B0)        # no scaffold kept: this is the circuit's qubit peak
+        else:
+            inv, scaffold = self.inv_init(B0)
         q0 = b.alloc_qubits(self.deg); self.xor_prod(A2[0], inv, q0)
         t1 = b.alloc_qubits(self.deg); b.cx(A2[1], t1); self.xor_prod(q0, B1, t1)
         if n == 1:
@@ -249,7 +252,10 @@ class BMDecoder:
             b.x(t1[0])
         self.mbuc_erase_sum_of_products(t1, [(q0, B1), (A2[1], None)]); b.free(t1)
         b.del_gf2_mul(A2[0], inv, target=q0, field=self.gf); b.free(q0)
-        self.inv_del(B0, inv, scaffold)
+        if self.tower is not None:
+            self.tower.del_inverse_compact(b, B0, inv); b.free(inv)
+        else:
+            self.inv_del(B0, inv, scaffold)
         for dst, terms in sel:
             k = terms[0][2]
             for flag, src, _ in terms:
