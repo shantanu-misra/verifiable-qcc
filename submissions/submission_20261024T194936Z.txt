@@ -1,0 +1,8 @@
+created_utc: 2026-10-24T19:49:40Z
+zip: submissions/submission.zip  sha256: 10c86bf6729410686fe84c1c2af57ec1ed03ff8bffd11577cb57fdcaa47fd93b
+invsqrt: circuits/invsqrt/invsqrt_165584_2d7c9f6e.kmx  sha256: 9ae830a19dec57964b6fc1f14255f1c2728ba26ca3cac5d3707d3c1c178b4729
+dqi:     circuits/dqi/dqi_3725395305991_c3edfdbf.kmb  sha256: c3edfdbfd33934c3fe8a4bb8087915c3da4a1d9c051ab2c6fad51894410d564d
+dfthcsos: baseline (data/sample_submission/dfthcsos)
+kaggle_public_score: 4.35605  (uploaded 2026-10-24; top of the public leaderboard at that time: 18.86345)
+local_expected_score: 4.3494  (invsqrt 2076774.23/165583.96 = 12.542x, dqi 24439463583672.93/3725395305990.94 = 6.560x, dfthcsos 1.0)
+verifier_runs: runs/invsqrt_165584_2d7c9f6e_full.json, runs/dqi_3725395305991_c3edfdbf_full.json (dqi: 1 value error of 102,400 shots, R 1.1967)

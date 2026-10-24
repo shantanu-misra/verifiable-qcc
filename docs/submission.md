@@ -41,8 +41,11 @@ layout. If a generator ever allocates ids sparsely, check the id cap, not just `
 | date (UTC) | zip sha256 | invsqrt | dqi | dfthcsos | local expected | public LB | rank |
 |---|---|---|---|---|---|---|---|
 | 2026-10-24 | 225d0487… | `invsqrt_488144_1b46306c.kmx` (488,144.07) | baseline | baseline | 1.6204 | **1.62036** | 392 / 521 |
+| 2026-10-24 | 10c86bf6… | `invsqrt_165584_2d7c9f6e.kmx` (165,583.96) | `dqi_3725395305991_c3edfdbf.kmb` (3.7254e12, 1 failure locally) | baseline | 4.3494 (4.356 if the salted dqi run has 0 failures) | **4.35605** | n/a (top score 18.86345) |
 
-The public score equalled the local prediction to five digits, so the salted leaderboard runs agree with our
+The second upload scored 4.35605 against a local 4.3494: the difference is exactly the dqi repetition factor going
+from R(1 failure) = 1.1967 to R(0 failures) = 1.1913, i.e. the salted shot stream drew none of the rare j = 3 inputs
+(`tasks/dqi/notes.md` §5). The first upload's public score equalled the local prediction to five digits, so the salted leaderboard runs agree with our
 local verifier runs (the per-salt `baseline_cost` for invsqrt is evidently the same as our unsalted one; the
 verifier runs every x, so only `HMR`/`R` outcomes depend on the seed).
 
