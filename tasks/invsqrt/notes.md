@@ -325,3 +325,51 @@ default build reproduces sha 1b46306c.
 Remaining Q: x 22 + flags 10 + c1 22 + p 29 = 83 permanent; step-1 peak adds c2 22 + scratch 22 + carries 21.
 Further Q cuts need either a second lookup (load c0 just before step 2, +254 Toffolis/direction, −29 Q during
 step 1 — roughly neutral on Q·C) or a fused controlled adder without the scratch register (candidate #9).
+
+## 10. Signed-digit Horner design (public ideas, our implementation) — 2026-10-24
+
+`docs/public_sota.md` summarises the public Kaggle notebooks. The ideas below are theirs; the code in
+`tasks/invsqrt/model_sd.py` and `tasks/invsqrt/build_sd.py` is written from scratch by us. Credits: **Sumit
+Chongder** (centred signed-digit Horner with Gidney adders, binary normalisation with a parity-indexed QROM,
+coefficient fitting, measurement-cleared flags), **anazemcev / Artem1410** (phase-and-release the static high
+word, fold the last carry, borrow x[21]), **Rudra Bhaskar** (derivative split into residual + looked-up coarse
+part, top-carry reuse, early static-high phase checkpoint), **kirilltym** (integration and independent
+verification), **Alex Chilton** (temp-AND moves into still-|0⟩ shifter qubits, shared prefix flags, one
+coefficient bit fewer, the cost anatomy that pointed at our `_add_row` rows). Reported dead ends we did not
+repeat: cubic × 32 segments, 64 or 256 segments, phase-gradient register, in-place Cuccaro adder, spending
+margin on rotations.
+
+### What changes versus §7–§9
+
+* **Rows without partial products.** With centred digits sig_i = 2·x[i] − 1 ∈ {±1}, u = Σ sig_i 2^(i−DU) =
+  M − M_mid, every Horner row is one *unconditional* adder of the shifted operand: the sign is applied by
+  CNOT-conjugating the target from the digit qubit (~(~t + a) = t − a), the bit of the operand just below the
+  cut is the adder's carry-in (round-to-nearest for free). A row costs n − 1 Toffolis for an n-bit target
+  and no scratch register. Our `_add_row` rows cost ≈ 2n − 1 plus 29 scratch qubits.
+* **Binary normalisation to M ∈ [1,2)**: five stages (shift 16/8/4/2/1); the stage flags are the leading-zero
+  count in binary, f0 is the parity that picks one of two 128-segment tables (256 QROM entries addressed by
+  x[14:21] + f0). Un-normalising clears each AND flag by an X-basis measurement whose kickback is undone by a
+  conditioned multi-controlled Z, which runs on half the shots (the verifier counts executed Toffolis).
+* **Phase additivity**: Y = L + 2^S·H with H a per-segment constant from the QROM; H is shifted, phased and
+  erased (`del_lookup` of 8 bits) before the arithmetic, so the rows touch only the 21-bit L.
+* **Narrow registers**: R = base·2^11 + residual with base looked up (7 bits) and the inner rows on a 12-bit
+  residual, merged by one 7-bit adder; last carry computed straight into the target MSB (n − 2 ancillas);
+  x[21] (always 1 after normalisation, never read) flipped to 0 and lent to the adders as a carry wire.
+
+### Classical model (`model_sd.py`, all 3,133,452 x against the verifier's `reference_values`)
+
+| config (norm:F2:F1:FY:GY, drops) | fit worst / tol | max err/tol (actual x) | rows2 | widths w2/w1/wy | note |
+|---|---|---|---|---|---|
+| pairs:12:22:29:0 | 0.659 | 0.659 | 14 | 12/22/30 | milestone 1 |
+| binary:10:19:28:2, drop digit 5 | 0.928 | 0.910 | 8 | 9/18/28 | public widths; milestones 2–3 |
+| binary:9:19:28:2, drop digit 5 | 0.945 | 0.910 | 8 | 8/18/28 | milestone 4 |
+| binary:10:18:27:1, drop 5 | 1.541 | FAIL | | | one bit less anywhere else fails |
+
+The model reproduces the public notebooks' own worst-case figures (0.928 / 0.945) to three digits.
+
+### Verified milestones (official verifier, full 200,540,928-shot runs; all `--check` 0 mismatches)
+
+| milestone | circuit | score | Q | Toffolis (executed) | C | rotations / eps | worst err/tol, x |
+|---|---|---|---|---|---|---|---|
+| §9 (previous best) | invsqrt_488144_1b46306c | 488,144.07 | 147 | 3,074 | 3,320.71 | 36 / 1.344e-12 | 0.7348, 263,159 |
+| M1 signed-digit rows on the §9 structure (pairs:12:22:29:0) | invsqrt_297214_073caa33 | **297,214.22** | 124 | 2,145 | 2,396.89 | 37 / 1.680e-12 | 0.6594, 1,052,866 |
