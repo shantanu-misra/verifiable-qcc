@@ -109,16 +109,25 @@ class Tower:
                 if self.nusq[r][i]:
                     b.cx(bb[i], N[r])
 
-    def _sub_inv_init(self, b, N):
+    def _sub_inv_init(self, b, N, gate=None):
+        """(Ninv, scaffold) for the subfield; with `gate`, Ninv = gate * N^-1 (gating is pushed to the smallest field)."""
         if self.sub is not None:
-            return self.sub.init_inverse_with_scaffold(b, N)
-        return b.init_gf2_inverse_with_scaffold(N, field=self.g)
+            return self.sub.init_inverse_with_scaffold(b, N, gate=gate)
+        inv, sc = b.init_gf2_inverse_with_scaffold(N, field=self.g)
+        if gate is None:
+            return inv, (sc, None, None)
+        g_inv = b.alloc_qubits(len(N))
+        b.ccx(gate, inv, g_inv)
+        return g_inv, (sc, inv, gate)
 
     def _sub_inv_del(self, b, N, Ninv, sc):
         if self.sub is not None:
             self.sub.del_inverse_with_scaffold(b, N, target=Ninv, scaffold=sc); b.free(Ninv)
         else:
-            b.del_gf2_inverse_with_scaffold(N, target=Ninv, scaffold=sc, field=self.g); b.free(sc); b.free(Ninv)
+            sc0, inv, gate = sc
+            if inv is not None:
+                b.del_and(gate, inv, Ninv); b.free(Ninv); Ninv = inv
+            b.del_gf2_inverse_with_scaffold(N, target=Ninv, scaffold=sc0, field=self.g); b.free(sc0); b.free(Ninv)
 
     def init_inverse_with_scaffold(self, b: km.CircuitBuilder, x, *, target=None, gate=None):
         """target := x^-1 (0 -> 0), or gate * x^-1 when a control qubit `gate` is given (k Toffolis extra).
@@ -131,14 +140,9 @@ class Tower:
         N = b.alloc_qubits(k)
         b.cx(ab, N)
         self._norm_linear(b, a, bb, N)
-        Ninv, sc = self._sub_inv_init(b, N)
-        if gate is not None:
-            Ng = b.alloc_qubits(k)
-            b.ccx(gate, Ninv, Ng)
-            use = Ng
-        else:
-            Ng = None
-            use = Ninv
+        Ninv, sc = self._sub_inv_init(b, N, gate)      # gated inside the subfield when gate is given
+        Ng = None
+        use = Ninv
         if target is None:
             target = b.alloc_qubits(2 * k)
         lo, hi = target[:k], target[k:]
@@ -162,8 +166,6 @@ class Tower:
         b.cx(bb, a)
         b.del_gf2_mul(a, use, target=lo, field=g)
         b.cx(bb, a)
-        if Ng is not None:
-            b.del_and(gate, Ninv, Ng); b.free(Ng)
         self._sub_inv_del(b, N, Ninv, sc)
         self._norm_linear(b, a, bb, N)
         b.cx(ab, N)
