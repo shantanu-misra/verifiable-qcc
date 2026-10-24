@@ -1,0 +1,3 @@
+# full-scale dqi circuits are 400+ MB: regenerate with tasks/dqi/build_bm.py (sha256 in runs/*.json)
+*.kmb
+*.kmx
