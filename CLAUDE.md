@@ -76,7 +76,7 @@ Official verifiers (what the leaderboard runs): `data/verifiers/invsqrt/verify_s
 Seeds = SHA-256 of the canonical `.kmb` bytes (+ `--salt`, private on the leaderboard), so a local pass is strong
 evidence, not identity; `--seed N` overrides for debugging only.
 ```bash
-scripts/verify.sh invsqrt circuits/invsqrt/<file>.kmx            # full run: 200,540,928 shots (~10 min in Docker on M-series)
+scripts/verify.sh invsqrt circuits/invsqrt/<file>.kmx            # full run: 200,540,928 shots (~4 min in Docker on M-series)
 scripts/verify.sh invsqrt circuits/invsqrt/<file>.kmx --max-x 4096   # smoke test (<1 s); NOT a reportable score
 scripts/verify.sh dqi     circuits/dqi/<file>.kmb                # 102,400 shots; --max-workers 4 default, ~6 GB RAM each
 ```
@@ -88,8 +88,10 @@ Output is JSON. PASS → `{"status":"PASS","score":…,"num_qubits":…,"toffoli
 `{"status":"FAIL","error":"x=729: phase error … exceeds tolerance …"}` / `"Scratch qubit q17 did not return to |0>"`
 / `"Registers must be exactly S0..S{n-1} and E0..E{m-1}."` etc. The reported `score` is the per-task cost (lower is
 better); the leaderboard number is `(∏ baseline/score)^(1/3)` across the three tasks.
-Baseline verified locally 2026-10-23 (`--max-x 4096`): invsqrt score 2,069,865.06, C=7,961.02, Q=260 — use the
-full-run figure in `runs/invsqrt_baseline_full.json` as the denominator.
+**invsqrt baseline, full official run, 2026-10-23: score 2,076,774.23** (Q=260, C=7,987.59, rotation_eps 1.53e-12,
+worst error/tol 0.477 at x=2,588,411; 4 min 9 s on an M-series Mac). Raw JSON: `runs/invsqrt_baseline_full.json`.
+This is the denominator for every invsqrt improvement. TODO: run the dqi baseline once (needs ~24 GB RAM at
+`--max-workers 4`; use `--max-workers 1` if Docker's memory limit is lower) and record it here the same way.
 Useful kickmix-native checks (confirmed APIs) that are NOT the verifier:
 ```python
 import kickmix as km
