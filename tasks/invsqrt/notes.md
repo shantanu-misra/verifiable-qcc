@@ -263,8 +263,9 @@ step 1, re-lookup of c2 for the uncompute, joint `del_lookup` at the end. Unary 
 | reaction depth / ops | 1,407 / 44,652 | — |
 | sha256 | d9159333… | — |
 
-Per-stage static Toffolis (from `analyze_reference.py` on this circuit): normalize 120 / 110, lookup_all 254,
-step 1 ≈ 450, del_c2 25, step 2 ≈ 590, denormalize 300 per direction, relookup_c2 254, del_all 25.
+Per-stage static Toffolis (`analyze_reference.py` on this circuit, depth 2): normalize 120 / 110, lookup_all 254,
+step 1 413 (×2), del_c2 25, step 2 595 (×2), denormalize 290 (×2; 10 flags × 29 CSWAP), relookup_c2 254, del_all 25.
+Sum 3,384 = 2,562 CCX + 822 CSWAP. Lookups are 558 (16.5 %), denormalize 580 (17 %), Horner rows 2,016 (60 %).
 
 Next steps, in order of expected gain (all against Q·C = 6.21e5): binary-s barrel denormalize (#3, ≈ −280
 Toffolis → C ≈ 3,350, −7.7 %); id aliasing (#2: c2's 22 ids are dead during step 2 and the un-step-2, the
