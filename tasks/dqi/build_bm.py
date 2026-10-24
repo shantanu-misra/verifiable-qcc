@@ -1,0 +1,423 @@
+"""Berlekamp-Massey + Chien/Forney MBUC decoder for Benchmark II, built with km.CircuitBuilder.
+
+Design (tasks/dqi/notes.md §4): the connection polynomial C lives in `A2` (t+1 slots, scaled so its constant term is a
+quantum scalar), the auxiliary polynomial x^m B in `A1` (t+1 slots, rotated up one slot per step), discrepancies are
+computed into `d`, the quotient scalar nu = d'/b' is erased after the update by the power-series recursion
+nu_j = [A2 / B]_j (j <= 2), and syndromes stay live. Phase 2 (sweep) and the omega swap follow in later pieces.
+
+Usage (inside Docker): python tasks/dqi/build_bm.py out.kmb [--n 70 --degree 12 --m 4095]
+"""
+from __future__ import annotations
+
+import kickmix as km
+
+
+class BMDecoder:
+    def __init__(self, builder: km.CircuitBuilder, n: int, field: km.GF2Field, m_positions: int):
+        self.b = builder
+        self.n = n
+        self.t = n // 2
+        self.gf = field
+        self.deg = field.degree
+        self.m = m_positions
+        self.slots = self.t + 1  # C has degree <= t
+
+    # ---- helpers -------------------------------------------------------------------------------
+    def disc_bound(self, n: int) -> int:
+        """Highest C slot index that can be nonzero at step n (L_n <= n//2 + 1 observed, +1 margin)."""
+        return min(self.t, n, n // 2 + 2)
+
+    def upd_bound(self, n: int) -> int:
+        """Highest A1 slot that can be nonzero at step n when d != 0 (top = n + 1 - L_old <= n//2 + 3)."""
+        return min(self.t, n + 1, n // 2 + 3)
+
+    def swap_bound(self, n: int) -> int:
+        """Highest slot that can be nonzero in A1 or A2 at a length change at step n."""
+        return max(self.disc_bound(n), self.upd_bound(n))
+
+    def xor_prod(self, x, y, target, control=True):
+        self.b.ixor_gf2_mul(x, y, target=target, field=self.gf, control=control)
+
+    def is_zero(self, reg, target):
+        self.b.flip_if_equal(reg, 0, target=target)
+
+    def ctrl_copy(self, flag, src, dst):
+        """dst ^= flag & src (12 Toffolis), MBUC-erasable via `unctrl_copy`."""
+        self.b.ccx(flag, src, dst)
+
+    def mbuc_erase_ctrl_copies(self, dst, terms):
+        """Erase dst = XOR_k flag_k & src_k by X-measurement + CZ fixups (0 Toffolis)."""
+        bits = self.b.alloc_bits(len(dst))
+        self.b.hmr(dst, bits)
+        for flag, src in terms:
+            for q, bit in zip(src, bits):
+                self.b.push_condition(bit)
+                self.b.cz(flag, q)
+                self.b.pop_condition()
+        self.b.free(bits)
+
+    def mbuc_erase_sum_of_products(self, dst, pairs):
+        """Erase dst = XOR_k x_k * y_k (GF products) by X-measurement + bilinear phase fixups (0 Toffolis)."""
+        bits = self.b.alloc_bits(len(dst))
+        self.b.hmr(dst, bits)
+        for x, y in pairs:
+            if y is None:   # a plain copied register term: phase (-1)^<m, x>
+                for q, bit in zip(x, bits):
+                    self.b.push_condition(bit); self.b.z(q); self.b.pop_condition()
+            else:
+                self.b.gf2_phase_by_product(x, y, mask=bits, field=self.gf)
+        self.b.free(bits)
+
+    # ---- registers -----------------------------------------------------------------------------
+    def alloc_state(self):
+        b = self.b
+        self.A2 = [b.alloc_qubits(self.deg) for _ in range(self.slots)]  # scaled C
+        self.A1 = [b.alloc_qubits(self.deg) for _ in range(self.slots)]  # x^m B, rotated
+        self.breg = b.alloc_qubits(self.deg)                               # b (previous discrepancy), init 1
+        self.Lreg = b.alloc_qubits(max(1, self.t.bit_length() + 1))        # L
+        b.x(self.A2[0][0])   # C = 1
+        b.x(self.A1[1][0])   # x^1 * B, B = 1
+        b.x(self.breg[0])    # b = 1
+
+    def free_state(self):
+        b = self.b
+        b.x(self.A2[0][0]); b.x(self.A1[1][0]); b.x(self.breg[0])
+        for r in (*self.A2, *self.A1, self.breg, self.Lreg):
+            b.free(r)
+
+    # ---- one BM step -----------------------------------------------------------------------------
+    def discrepancy(self, n: int, d, S):
+        for i in range(self.disc_bound(n) + 1):
+            self.xor_prod(self.A2[i], S[n - i], d)
+
+    def disc_pairs(self, n: int, S):
+        return [(self.A2[i], S[n - i]) for i in range(self.disc_bound(n) + 1)]
+
+    def rotate_A1(self, up: bool):
+        """Cyclic rotation of the slot array A1 by one slot (free SWAPs)."""
+        order = range(self.slots - 1, 0, -1) if up else range(1, self.slots)
+        for i in order:
+            self.b.swap(self.A1[i], self.A1[i - 1])
+
+    def lc_flag(self, n: int, d, lc):
+        """lc = (d != 0) and (L <= n // 2)."""
+        b = self.b
+        z = b.alloc_qubits(1)[0]
+        cond = b.alloc_qubits(1)[0]
+        self.is_zero(d, z)
+        b.x(z)
+        b.flip_if_less_than(self.Lreg, n // 2 + 1, target=cond)
+        b.ccx(z, cond, lc)
+        b.flip_if_less_than(self.Lreg, n // 2 + 1, target=cond)
+        b.x(z)
+        self.is_zero(d, z)
+        b.free(cond); b.free(z)
+
+    def update_L(self, n: int, lc):
+        """if lc: L <- n + 1 - L  (self-inverse)."""
+        b = self.b
+        tmp = b.alloc_qubits(len(self.Lreg))
+        b.cx(self.Lreg, tmp)
+        b.x(tmp); b.iadd(1, target=tmp)          # tmp = -L
+        b.iadd(n + 1, target=tmp)                # tmp = n + 1 - L
+        b.cswap(lc, self.Lreg, tmp)
+        b.isub(n + 1, target=tmp); b.isub(1, target=tmp); b.x(tmp)   # tmp = L (new)
+        b.cx(self.Lreg, tmp)                     # tmp = 0
+        b.free(tmp)
+
+    def quotient_recursion(self, n: int, nu, wrap):
+        """nu ^= selected quotient coefficient of A2 / B, where B = A1 shifted down by j (j = 0, 1, 2 selected by
+        zero tests of A1[0..2]); gated by `wrap` = 0 (L > n - t). Also used by the reverse pass."""
+        b = self.b
+        A1, A2 = self.A1, self.A2
+        if self.slots < 5:
+            raise ValueError('need at least 5 slots')
+        # flags: f0 = A1[0] != 0 ; f1 = A1[0] == 0 & A1[1] != 0 ; f2 = A1[0] == 0 & A1[1] == 0 & A1[2] != 0 ; all & ~wrap
+        z0, z1, z2 = b.alloc_qubits(3)
+        self.is_zero(A1[0], z0); self.is_zero(A1[1], z1); self.is_zero(A1[2], z2)
+        # ok = (not wrap) and (2L > n): a step with 2L <= n and no length change had d = 0 (tail of zero
+        # discrepancies, where j >= m1 and the recursion is invalid), so nothing must be XORed into nu there.
+        cond = b.alloc_qubits(1)[0]
+        b.flip_if_less_than(self.Lreg, n // 2 + 1, target=cond)   # cond = L <= n // 2
+        b.x(cond); b.x(wrap)
+        nw = b.alloc_qubits(1)[0]
+        b.init_and(cond, wrap, nw)                                # nw = (2L > n) and not wrap
+        b.x(wrap); b.x(cond)
+        f0, f1, f2 = b.alloc_qubits(3)
+        b.x(z0); b.init_and(z0, nw, f0); b.x(z0)                 # f0 = ~z0 & nw
+        g = b.alloc_qubits(1)[0]
+        b.init_and(z0, nw, g)                                     # g = z0 & nw
+        b.x(z1); b.init_and(g, z1, f1); b.x(z1)                   # f1 = g & ~z1
+        h = b.alloc_qubits(1)[0]
+        b.init_and(g, z1, h)                                      # h = z0 & z1 & nw
+        b.x(z2); b.init_and(h, z2, f2); b.x(z2)                   # f2 = h & ~z2
+        # selected B[0], B[1], B[2]
+        B0, B1, B2 = (b.alloc_qubits(self.deg) for _ in range(3))
+        sel = [(B0, [(f0, A1[0]), (f1, A1[1]), (f2, A1[2])]),
+               (B1, [(f0, A1[1]), (f1, A1[2]), (f2, A1[3])]),
+               (B2, [(f0, A1[2]), (f1, A1[3]), (f2, A1[4])])]
+        for dst, terms in sel:
+            for flag, src in terms:
+                self.ctrl_copy(flag, src, dst)
+        inv, scaffold = b.init_gf2_inverse_with_scaffold(B0, field=self.gf)
+        q0 = b.alloc_qubits(self.deg); self.xor_prod(A2[0], inv, q0)
+        t1 = b.alloc_qubits(self.deg); b.cx(A2[1], t1); self.xor_prod(q0, B1, t1)
+        if n == 1:
+            b.x(t1[0])          # first division: X = x * B_init = x, X[1] = 1
+        q1 = b.alloc_qubits(self.deg); self.xor_prod(t1, inv, q1)
+        t2 = b.alloc_qubits(self.deg); b.cx(A2[2], t2); self.xor_prod(q0, B2, t2); self.xor_prod(q1, B1, t2)
+        if n == 3:
+            b.x(t2[0])          # first division with S_1 = 0: X = x^2, X[2] = 1
+        q2 = b.alloc_qubits(self.deg); self.xor_prod(t2, inv, q2)
+        self.ctrl_copy(f0, q0, nu); self.ctrl_copy(f1, q1, nu); self.ctrl_copy(f2, q2, nu)
+        # uncompute
+        b.del_gf2_mul(t2, inv, target=q2, field=self.gf); b.free(q2)
+        self.xor_prod(q1, B1, t2); self.xor_prod(q0, B2, t2)
+        if n == 3:
+            b.x(t2[0])
+        b.cx(A2[2], t2); b.free(t2)
+        b.del_gf2_mul(t1, inv, target=q1, field=self.gf); b.free(q1)
+        self.xor_prod(q0, B1, t1)
+        if n == 1:
+            b.x(t1[0])
+        b.cx(A2[1], t1); b.free(t1)
+        b.del_gf2_mul(A2[0], inv, target=q0, field=self.gf); b.free(q0)
+        b.del_gf2_inverse_with_scaffold(B0, target=inv, scaffold=scaffold, field=self.gf)
+        b.free(scaffold); b.free(inv)
+        for dst, terms in sel:
+            self.mbuc_erase_ctrl_copies(dst, terms)
+            b.free(dst)
+        b.x(z2); b.del_and(h, z2, f2); b.x(z2); b.del_and(g, z1, h)
+        b.x(z1); b.del_and(g, z1, f1); b.x(z1); b.del_and(z0, nw, g)
+        b.x(z0); b.del_and(z0, nw, f0); b.x(z0)
+        b.free(km.array([f0, f1, f2, g, h]))
+        b.x(cond); b.x(wrap); b.del_and(cond, wrap, nw); b.x(wrap); b.x(cond); b.free(nw)
+        b.flip_if_less_than(self.Lreg, n // 2 + 1, target=cond); b.free(cond)
+        self.is_zero(A1[2], z2); self.is_zero(A1[1], z1); self.is_zero(A1[0], z0)
+        b.free(km.array([z0, z1, z2]))
+
+    def wrap_flag(self, n: int, wrap):
+        """wrap = (L <= n - t): A1 may have wrapped around; then d = 0 and nothing is erased."""
+        if n - self.t >= 0:
+            self.b.flip_if_less_than(self.Lreg, n - self.t + 1, target=wrap)
+
+    def forward_step(self, n: int, S):
+        b = self.b
+        with b.mark('bm_step'):
+            d = b.alloc_qubits(self.deg)
+            with b.mark('discrepancy'):
+                self.discrepancy(n, d, S)
+            lc = b.alloc_qubits(1)[0]
+            self.lc_flag(n, d, lc)
+            with b.mark('cswap'):
+                for i in range(self.swap_bound(n) + 1):
+                    b.cswap(lc, self.A1[i], self.A2[i])
+                b.cswap(lc, d, self.breg)
+            with b.mark('quotient'):
+                binv, sc = b.init_gf2_inverse_with_scaffold(self.breg, field=self.gf)
+                nu = b.alloc_qubits(self.deg)
+                self.xor_prod(d, binv, nu)
+                b.del_gf2_inverse_with_scaffold(self.breg, target=binv, scaffold=sc, field=self.gf)
+                b.free(sc); b.free(binv)
+            with b.mark('update'):
+                for i in range(self.upd_bound(n) + 1):
+                    self.xor_prod(nu, self.A1[i], self.A2[i])
+            b.del_gf2_mul(nu, self.breg, target=d, field=self.gf)   # d' = nu * b'
+            b.free(d)
+            self.update_L(n, lc)
+            wrap = b.alloc_qubits(1)[0]
+            self.wrap_flag(n, wrap)
+            with b.mark('erase_nu'):
+                self.quotient_recursion(n, nu, wrap)
+            b.free(nu)
+            # erase lc: lc ^= (A1[0] != 0) & ~wrap
+            z = b.alloc_qubits(1)[0]
+            self.is_zero(self.A1[0], z); b.x(z)
+            b.x(wrap); b.ccx(z, wrap, lc); b.x(wrap)
+            b.x(z); self.is_zero(self.A1[0], z); b.free(z)
+            b.free(lc)
+            self.wrap_flag(n, wrap)
+            b.free(wrap)
+            if n + 1 < self.n:
+                self.rotate_A1(up=True)
+
+    def reverse_step(self, n: int, S):
+        """Exact mirror of `forward_step`."""
+        b = self.b
+        with b.mark('bm_step_rev'):
+            if n + 1 < self.n:
+                self.rotate_A1(up=False)
+            wrap = b.alloc_qubits(1)[0]
+            self.wrap_flag(n, wrap)
+            lc = b.alloc_qubits(1)[0]
+            z = b.alloc_qubits(1)[0]
+            self.is_zero(self.A1[0], z); b.x(z)
+            b.x(wrap); b.ccx(z, wrap, lc); b.x(wrap)
+            b.x(z); self.is_zero(self.A1[0], z); b.free(z)
+            nu = b.alloc_qubits(self.deg)
+            with b.mark('erase_nu'):
+                self.quotient_recursion(n, nu, wrap)
+            self.wrap_flag(n, wrap)
+            b.free(wrap)
+            self.update_L(n, lc)
+            d = b.alloc_qubits(self.deg)
+            self.xor_prod(nu, self.breg, d)                       # d' = nu * b'
+            with b.mark('update'):
+                for i in range(self.upd_bound(n) + 1):
+                    self.xor_prod(nu, self.A1[i], self.A2[i])
+            with b.mark('quotient'):
+                binv, sc = b.init_gf2_inverse_with_scaffold(self.breg, field=self.gf)
+                self.xor_prod(d, binv, nu)
+                b.del_gf2_inverse_with_scaffold(self.breg, target=binv, scaffold=sc, field=self.gf)
+                b.free(sc); b.free(binv)
+            b.free(nu)
+            with b.mark('cswap'):
+                b.cswap(lc, d, self.breg)
+                for i in range(self.swap_bound(n) + 1):
+                    b.cswap(lc, self.A1[i], self.A2[i])
+            self.lc_flag(n, d, lc)
+            b.free(lc)
+            with b.mark('discrepancy_mbuc'):
+                self.mbuc_erase_sum_of_products(d, self.disc_pairs(n, S))
+            b.free(d)
+
+    # ---- omega and the S_1..S_t <-> omega swap -------------------------------------------------------
+    # omega_i (i < t) is stored in the qubits of the erased syndrome S[i+1]; omega_{t-1} is built in a temporary
+    # register and moved into S[0] once that is erased, so the swap costs no extra qubit ids.
+    def alloc_omega(self, S):
+        self.Wtmp = self.b.alloc_qubits(self.deg)
+        self.W = [S[i + 1] for i in range(self.t - 1)] + [S[0]]
+
+    def omega_pairs(self, i: int, S):
+        return [(self.A2[k], S[i - k]) for k in range(i + 1)]
+
+    def _erase_S(self, i: int, S, w, inv0):
+        """S[i] ^= A2[0]^-1 (w + sum_{k>=1} A2[k] S[i-k])  -> 0, with w holding omega_i."""
+        b = self.b
+        u = b.alloc_qubits(self.deg)
+        b.cx(w, u)
+        for k in range(1, i + 1):
+            self.xor_prod(self.A2[k], S[i - k], u)
+        self.xor_prod(u, inv0, S[i])
+        self.mbuc_erase_sum_of_products(u, [(self.A2[k], S[i - k]) for k in range(1, i + 1)] + [(w, None)])
+        b.free(u)
+
+    def omega_swap_forward(self, S):
+        b, t = self.b, self.t
+        with b.mark('omega_swap'):
+            inv0, sc = b.init_gf2_inverse_with_scaffold(self.A2[0], field=self.gf)
+            for i in range(t - 1, -1, -1):
+                w = self.Wtmp if i == t - 1 else S[i + 1]
+                for k in range(i + 1):
+                    self.xor_prod(self.A2[k], S[i - k], w)       # w = omega_i
+                self._erase_S(i, S, w, inv0)
+            b.swap(self.Wtmp, S[0])                               # omega_{t-1} -> S[0]'s qubits
+            b.del_gf2_inverse_with_scaffold(self.A2[0], target=inv0, scaffold=sc, field=self.gf)
+            b.free(sc); b.free(inv0)
+
+    def omega_swap_reverse(self, S):
+        b, t = self.b, self.t
+        with b.mark('omega_unswap'):
+            inv0, sc = b.init_gf2_inverse_with_scaffold(self.A2[0], field=self.gf)
+            b.swap(self.Wtmp, S[0])
+            for i in range(t):
+                w = self.Wtmp if i == t - 1 else S[i + 1]
+                self._erase_S(i, S, w, inv0)                      # restores S[i]
+                self.mbuc_erase_sum_of_products(w, self.omega_pairs(i, S))
+            b.del_gf2_inverse_with_scaffold(self.A2[0], target=inv0, scaffold=sc, field=self.gf)
+            b.free(sc); b.free(inv0)
+
+    # ---- Chien search + Forney phase kickback -------------------------------------------------------
+    def sweep(self, E):
+        """For every position j (X_j = alpha^j): if sigma(X_j^-1) = 0, phase by <omega(X_j^-1)/sigma'(X_j^-1), M_j>."""
+        b, gf, t = self.b, self.gf, self.t
+        alpha = gf.primitive_element
+        order = (1 << self.deg) - 1
+        A2, W = self.A2, self.W
+        odd = [A2[k] for k in range(1, t + 1, 2)]
+        even = [A2[k] for k in range(2, t + 1, 2)]
+        z = b.alloc_qubits(1)[0]
+        located = b.alloc_qubits(self.deg)
+        is_err = b.alloc_bits(1)
+        step = b.mark('forney_step')
+        for j in range(self.m):
+            with step:
+                b.bit_store(is_err[0], True, control=E[j])
+                b.push_condition(is_err[0])
+                # sums in place: A2[1] <- T = sum of odd slots; A2[0] <- sigma(X^-1) = A2[0] + T + even; W[0] <- omega(X^-1)
+                for r in odd[1:]:
+                    b.cx(r, A2[1])
+                for r in even:
+                    b.cx(r, A2[0])
+                b.cx(A2[1], A2[0])
+                for r in W[1:]:
+                    b.cx(r, W[0])
+                self.is_zero(A2[0], z)
+                inv, sc = b.init_gf2_inverse_with_scaffold(A2[1], field=gf)   # 1 / T,  sigma'(X_j^-1) = alpha^j T
+                b.gf2_imul(gf.pow(alpha, (-j) % order), target=inv, field=gf) if j % order else None
+                b.init_and(z, W[0], located)
+                b.gf2_phase_by_product(located, inv, mask=E[j], field=gf)
+                b.del_and(z, W[0], located)
+                if j % order:
+                    b.gf2_idiv(gf.pow(alpha, (-j) % order), target=inv, field=gf)
+                b.del_gf2_inverse_with_scaffold(A2[1], target=inv, scaffold=sc, field=gf)
+                b.free(sc); b.free(inv)
+                self.is_zero(A2[0], z)
+                for r in W[1:]:
+                    b.cx(r, W[0])
+                b.cx(A2[1], A2[0])
+                for r in even:
+                    b.cx(r, A2[0])
+                for r in odd[1:]:
+                    b.cx(r, A2[1])
+                b.pop_condition()
+                b.bit_store(is_err[0], False)
+                if j + 1 < self.m:
+                    for k in range(1, t + 1):
+                        b.gf2_imul(gf.pow(alpha, (-k) % order), target=A2[k], field=gf)
+                    for i in range(1, t):
+                        b.gf2_imul(gf.pow(alpha, (-i) % order), target=W[i], field=gf)
+        # undo the Chien rotations (m - 1 steps)
+        for k in range(1, t + 1):
+            b.gf2_idiv(gf.pow(alpha, (-k * (self.m - 1)) % order), target=A2[k], field=gf)
+        for i in range(1, t):
+            b.gf2_idiv(gf.pow(alpha, (-i * (self.m - 1)) % order), target=W[i], field=gf)
+        b.free(is_err); b.free(located); b.free(z)
+
+    def build(self, S, E):
+        b = self.b
+        self.alloc_state()
+        with b.mark('bm_forward'):
+            for i in range(self.n):
+                self.forward_step(i, S)
+        self.alloc_omega(S)
+        self.omega_swap_forward(S)
+        with b.mark('sweep'):
+            self.sweep(E)
+        self.omega_swap_reverse(S)
+        b.free(self.Wtmp)
+        with b.mark('bm_reverse'):
+            for i in reversed(range(self.n)):
+                self.reverse_step(i, S)
+        self.free_state()
+
+
+def build_circuit(n: int, degree: int, m: int) -> km.Circuit:
+    gf = km.GF2Field(degree)
+    b = km.CircuitBuilder()
+    S = [b.create_quantum_register(degree, name=f'S{i}') for i in range(n)]
+    E = [b.create_classical_register(degree, name=f'E{j}') for j in range(m)]
+    BMDecoder(b, n, gf, m).build(S, E)
+    return b.finish_circuit()
+
+
+if __name__ == '__main__':
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument('output'); ap.add_argument('--n', type=int, default=70); ap.add_argument('--degree', type=int, default=12)
+    ap.add_argument('--m', type=int, default=4095)
+    a = ap.parse_args()
+    c = build_circuit(a.n, a.degree, a.m)
+    c.to_file(a.output, format='kmb' if a.output.endswith('.kmb') else 'kmx')
+    st = c.operation_statistics()
+    print(f'wrote {a.output}: toffoli_like={st.num_toffoli_like} num_qubits={c.num_qubits} ops={len(c)}')
