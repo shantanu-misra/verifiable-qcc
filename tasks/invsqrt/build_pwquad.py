@@ -8,7 +8,7 @@ bit-exact classical model this must agree with):
     step 1  r1 = c1 - T(c2 * delta)    `_add_row` rows, one per delta bit (x[0:22-k])
     del_lookup(c2)                     measurement-based, frees c2's value (ids stay allocated)
     step 2  p  = c0 - T(r1 * delta)    into the low wp+1 bits of y1
-    denormalize (reference code)       y1 := p << s
+    denormalize                        y1 := p << s  (binary s + 4 controlled shifts; --no-barrel = reference unary)
     phase_by_bits (reference code)     Z_POW per bit of y1, F = wp + 11 fractional bits of a turn
     uncompute in reverse               (step 2^-1, init_lookup(c2), step 1^-1, del_lookup(all))
     un-normalize
@@ -66,26 +66,101 @@ def _rows_into(builder, inverse, cfg, x, mult, target, scratch, mult_frac, out_f
         nr._add_row(builder, inverse, control, terms, target, scratch, subtract=True)
 
 
-def build(cfg: mp.Config, table: dict[int, list[int]], *, compute_only: bool = False) -> km.Circuit:
+def _flags_to_binary(builder, inverse: bool, flags) -> list:
+    """In-place CNOT network turning the thermometer flags (flag i = [s >= i+1]) into binary s.
+
+    bit j of s = floor(s / 2^j) mod 2 = XOR_{t>=1} flag[t*2^j - 1]. Computed in place: bit0 into
+    flags[0] (uses flags[1..9]), bit1 into flags[1] (uses 3,5,7,9), bit2 into flags[3] (uses 7),
+    bit3 = flags[7]. Clifford only. Returns [bit0, bit1, bit2, bit3] qubits; `inverse` undoes it.
+    """
+    n = len(flags)
+    ops = []
+    for j in range(n.bit_length()):
+        tgt = 2**j - 1
+        if tgt >= n:
+            break
+        for t in range(2, n // 2**j + 1):
+            ops.append((flags[t * 2**j - 1], flags[tgt]))
+    for ctl, tgt in (reversed(ops) if inverse else ops):
+        builder.cx(ctl, tgt)
+    return [flags[2**j - 1] for j in range(n.bit_length()) if 2**j - 1 < n]
+
+
+def _barrel_denormalize(builder, inverse: bool, sbin: list, y1, len_p: int, s_max: int) -> None:
+    """`y1 := y1 << s` with s in binary: controlled shift by 2^j for each bit, low bits first.
+
+    Each stage is a cyclic `left_rotate` of a window just wide enough that its top 2^j bits are
+    zero, so the rotation is an exact shift: before stage j the value is p << (s mod 2^j).
+    """
+    stages = []
+    for j, ctl in enumerate(sbin):
+        residual = max((s % 2**j for s in range(s_max + 1) if s >> j & 1), default=None)
+        if residual is None:
+            continue
+        window = len_p + residual + 2**j
+        assert window <= len(y1), (j, window, len(y1))
+        stages.append((ctl, 2**j, y1[:window]))
+    for ctl, shift, lane in (reversed(stages) if inverse else stages):
+        if inverse:
+            builder.right_rotate(lane, shift, control=ctl)
+        else:
+            builder.left_rotate(lane, shift, control=ctl)
+
+
+class _Ids:
+    """Allocation tracker: asserts no two live registers ever share a qubit id and records the map."""
+
+    def __init__(self, builder: km.CircuitBuilder):
+        self.builder, self.live, self.history, self.peak = builder, {}, [], 0
+
+    def alloc(self, n: int, name: str) -> km.array:
+        arr = self.builder.alloc_qubits(n)
+        ids = [q.id for q in arr]
+        for other, oids in self.live.items():
+            assert not set(ids) & set(oids), f'{name} would alias live register {other}'
+        self.live[name] = ids
+        self.history.append((name, ids[0], ids[-1], n))
+        self.peak = max(self.peak, sum(len(v) for v in self.live.values()))
+        return arr
+
+    def free(self, name: str, arr: km.array) -> None:
+        assert self.live.pop(name) == [q.id for q in arr]
+        self.builder.free(arr)
+
+
+class Built:
+    def __init__(self, circuit, x, y1, ids):
+        self.circuit, self.x, self.y1, self.ids = circuit, x, y1, ids
+
+
+def build(cfg: mp.Config, table: dict[int, list[int]], *, compute_only: bool = False,
+          barrel: bool = True, alias: bool = False) -> Built:
+    """`alias=True` reuses qubit ids across non-overlapping live ranges (candidate #2): scratch is
+    allocated per step at the width that step needs, c2 is freed between del_c2 and relookup_c2,
+    and the top n_p bits of y1 exist only around denormalize/phase. The builder hands freed ids
+    back LIFO, so Q = peak simultaneous allocation; `_Ids` asserts live registers never overlap."""
     assert cfg.deg == 2, 'degree-3 variant not implemented (see model_pwquad.py)'
     k, wc, wp = cfg.k, cfg.wc, cfg.wp
     F = mp.F_OF(wp)
     builder = km.CircuitBuilder()
-
-    def alloc(n, name):
-        return builder.create_quantum_register(n, name=name) if compute_only else builder.alloc_qubits(n)
-
+    ids = _Ids(builder)
     x = builder.create_quantum_register(mp.WIDTH, name='x')
-    flags = alloc(mp.N_P, 'flags')
+    ids.live['x'] = [q.id for q in x]
+    flags = ids.alloc(mp.N_P, 'flags')
     len_c2 = wc
     len_c1 = max(v[1] for v in table.values()).bit_length()  # r1 <= c1, never wraps
     len_c0 = wp + 1
     assert max(v[2] for v in table.values()) < 2**len_c2 and max(v[0] for v in table.values()) < 2**len_c0
-    c2 = alloc(len_c2, 'c2')
-    c1 = alloc(len_c1, 'c1')
-    y1 = alloc(F, 'y1')
-    scratch = alloc(max(len_c1, len_c0), 'scratch')
-    p = y1[:len_c0]
+    c2 = ids.alloc(len_c2, 'c2')
+    c1 = ids.alloc(len_c1, 'c1')
+    if alias:
+        p = ids.alloc(len_c0, 'p')
+        top = None  # allocated around denormalize
+        scratch1 = scratch2 = None  # allocated per step
+    else:
+        y1 = ids.alloc(F, 'y1')
+        p = y1[:len_c0]
+        scratch1 = scratch2 = ids.alloc(max(len_c1, len_c0), 'scratch')
     address = x[mp.WIDTH - k:]
 
     full = [0] * 2**k
@@ -101,39 +176,74 @@ def build(cfg: mp.Config, table: dict[int, list[int]], *, compute_only: bool = F
         with builder.mark('lookup_all'):
             builder.init_lookup(table=full, address=address, target=joint_target)
         with builder.mark('step1'):
-            _rows_into(builder, False, cfg, x, c2, c1, scratch, wc, wc)
+            if alias:
+                scratch1 = ids.alloc(len_c1, 'scratch1')
+            _rows_into(builder, False, cfg, x, c2, c1, scratch1, wc, wc)
+            if alias:
+                ids.free('scratch1', scratch1)
         with builder.mark('del_c2'):
             builder.del_lookup(table=tab_c2, address=address, target=c2)
+            if alias:
+                ids.free('c2', c2)
         with builder.mark('step2'):
-            _rows_into(builder, False, cfg, x, c1, p, scratch, wc, wp)
+            if alias:
+                scratch2 = ids.alloc(len_c0, 'scratch2')
+            _rows_into(builder, False, cfg, x, c1, p, scratch2, wc, wp)
+            if alias:
+                ids.free('scratch2', scratch2)
         with builder.mark('denormalize'):
-            nr._denormalize(builder, False, flags, y1)
+            if alias:
+                top = ids.alloc(F - len_c0, 'y1_top')
+                y1 = km.array(list(p) + list(top))
+            if barrel:
+                sbin = _flags_to_binary(builder, False, flags)
+                _barrel_denormalize(builder, False, sbin, y1, len_c0, mp.N_P)
+            else:
+                nr._denormalize(builder, False, flags, y1)
     if compute_only:
-        return builder.finish_circuit()
+        return Built(builder.finish_circuit(), x, y1, ids)
     nr._phase_by_bits(builder, y1)
     with builder.mark('uncompute_y1'):
         with builder.mark('denormalize'):
-            nr._denormalize(builder, True, flags, y1)
+            if barrel:
+                _barrel_denormalize(builder, True, sbin, y1, len_c0, mp.N_P)
+                _flags_to_binary(builder, True, flags)
+            else:
+                nr._denormalize(builder, True, flags, y1)
+            if alias:
+                ids.free('y1_top', top)
         with builder.mark('step2'):
-            _rows_into(builder, True, cfg, x, c1, p, scratch, wc, wp)
+            if alias:
+                scratch2 = ids.alloc(len_c0, 'scratch2')
+            _rows_into(builder, True, cfg, x, c1, p, scratch2, wc, wp)
+            if alias:
+                ids.free('scratch2', scratch2)
         with builder.mark('relookup_c2'):
+            if alias:
+                c2 = ids.alloc(len_c2, 'c2')
+                joint_target = km.array(list(c2) + list(c1) + list(p))
             builder.init_lookup(table=tab_c2, address=address, target=c2)
         with builder.mark('step1'):
-            _rows_into(builder, True, cfg, x, c2, c1, scratch, wc, wc)
+            if alias:
+                scratch1 = ids.alloc(len_c1, 'scratch1')
+            _rows_into(builder, True, cfg, x, c2, c1, scratch1, wc, wc)
+            if alias:
+                ids.free('scratch1', scratch1)
         with builder.mark('del_all'):
             builder.del_lookup(table=full, address=address, target=joint_target)
         with builder.mark('normalize'):
             nr._normalize(builder, True, x, flags)
-    for reg in (flags, c2, c1, y1, scratch):
-        builder.free(reg)
-    return builder.finish_circuit()
+    for name, reg in ([('flags', flags), ('c2', c2), ('c1', c1), ('p', p)] if alias
+                      else [('flags', flags), ('c2', c2), ('c1', c1), ('y1', y1), ('scratch', scratch1)]):
+        ids.free(name, reg)
+    assert ids.live.keys() == {'x'}, ids.live
+    return Built(builder.finish_circuit(), x, y1, ids)
 
 
-def check_against_model(cfg: mp.Config, table: dict[int, list[int]], batch: int = 4096) -> None:
+def check_against_model(cfg: mp.Config, table: dict[int, list[int]], batch: int = 4096, **build_kw) -> None:
     """Simulates the compute-only prefix for every x and compares y1 with model_pwquad."""
-    circuit = build(cfg, table, compute_only=True)
-    regs = circuit.register_data
-    x_reg, y1_reg = km.array(list(regs['x'])), km.array(list(regs['y1']))
+    built = build(cfg, table, compute_only=True, **build_kw)
+    circuit, x_reg, y1_reg = built.circuit, built.x, built.y1
     F = mp.F_OF(cfg.wp)
     xs = np.arange(1, mp.MAX_X + 1, dtype=np.int64)
     s = (mp.WIDTH - (np.floor(np.log2(xs)).astype(np.int64) + 1)) // 2
@@ -181,15 +291,20 @@ def main() -> None:
     ap.add_argument('output', nargs='?', help='.kmx or .kmb path to write')
     ap.add_argument('--table', default=DEFAULT_TABLE)
     ap.add_argument('--check', action='store_true', help='simulate every x and compare y1 with the model')
+    ap.add_argument('--no-barrel', action='store_true', help='unary flag-controlled denormalize (reference style)')
+    ap.add_argument('--alias', action='store_true', help='reuse qubit ids across non-overlapping live ranges (candidate #2)')
     args = ap.parse_args()
     cfg, table = load_table(args.table)
-    circuit = build(cfg, table)
+    kw = dict(barrel=not args.no_barrel, alias=args.alias)
+    built = build(cfg, table, **kw)
+    circuit = built.circuit
+    print('allocation history (name, first id, last id, n):', built.ids.history, 'peak live =', built.ids.peak)
     st = circuit.operation_statistics()
     print(f'{cfg.name()}: num_qubits={circuit.num_qubits} toffoli_like={st.num_toffoli_like} '
           f't_like={st.num_t_like} rotations={st.num_z_pow(min_clifford_hierarchy_level=4)} '
           f'ops={len(circuit)} reaction_depth={circuit.reaction_depth()} (static counts, not a score)')
     if args.check:
-        check_against_model(cfg, table)
+        check_against_model(cfg, table, **kw)
     if args.output:
         circuit.to_file(args.output, format='kmb' if args.output.endswith('.kmb') else 'kmx')
         print('wrote', args.output)

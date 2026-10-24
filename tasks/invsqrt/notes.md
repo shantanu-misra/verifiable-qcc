@@ -271,3 +271,28 @@ Next steps, in order of expected gain (all against Q·C = 6.21e5): binary-s barr
 Toffolis → C ≈ 3,350, −7.7 %); id aliasing (#2: c2's 22 ids are dead during step 2 and the un-step-2, the
 upper 10 bits of y1 are dead until denormalize — the step-1 scratch/carries could live there) → Q ≈ 150–160;
 wc = 20 (model 0.761, −80 Toffolis/direction, −4 Q); then rotation trimming (#8) once margins are known.
+
+## 8. Candidate #3 built: barrel-shift denormalize — `circuits/invsqrt/invsqrt_567841_8714272b.kmx` (2026-10-24)
+
+`build_pwquad.py` (default on; `--no-barrel` restores the reference's unary shifter): the 10 thermometer flags
+are turned into binary s in place with 16 CNOTs (bit j of s = XOR of flags at indices t·2^j − 1: bit0 → flags[0],
+bit1 → flags[1], bit2 → flags[3], bit3 = flags[7]), then 4 controlled `left_rotate`s by 1, 2, 4, 8 on windows of
+30, 32, 36 and 39 qubits (each window has ≥ 2^j zero top bits, since before stage j the value is p << (s mod 2^j)
+and s ≤ 10, so every cyclic rotation is an exact shift). 136 CSWAPs per direction instead of 290; the CNOT
+conversion is Clifford and undone before un-normalize. `--check`: 0 mismatches over all 3,133,452 x.
+Normalize was left unary: a binary leading-zero-pair counter + barrel shift of x costs ≈ 21 + 88 Toffolis vs 120
+and needs its own ancillas, not a clear win.
+
+**Official verifier, full 200,540,928-shot run (`runs/invsqrt_567841_8714272b_full.json`): PASS, score 567,841.06**
+(3.657× below baseline; −8.5 % vs §7).
+
+| quantity | §7 (unary) | **§8 (barrel)** |
+|---|---|---|
+| score | 620,851.06 | **567,841.06** |
+| Q | 171 | 171 |
+| Toffolis | 3,384 | **3,074** (−310: denormalize 290 → 135 per direction) |
+| C | 3,630.71 | **3,320.71** |
+| rotations / eps | 36 / 1.3445e-12 | 36 / 1.3445e-12 (unchanged: same phase word) |
+| worst err/tol, x | 0.7348, 263,159 | 0.7348, 263,159 |
+| reaction depth / ops | 1,407 / 44,652 | 1,383 / 44,346 |
+| sha256 | d9159333 | 8714272b |
