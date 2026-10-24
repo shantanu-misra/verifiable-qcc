@@ -29,3 +29,42 @@ regenerated reference `.kmx`; these are **estimates**, never scores (CLAUDE.md r
 
 Takeaways: a quantum × quantum GF(2¹²) product costs 63 Toffolis and the inverse 315 (5 products); constant
 multiplications and the ⟨product, mask⟩ phase kickback are free; a controlled register XOR is 12.
+
+## 2. Reference circuit breakdown (`analyze_reference.py` on the regenerated `.kmx`, 86,105,159 lines)
+
+Regenerating with `data/verifiers/dqi/dqi_reference_circuit.py` reproduces the sample's 5,725,461 static
+Toffolis and Q = 1,893 (the verifier executed 5,725,108 per shot: only the `is_error` guard skips, M_j = 0).
+
+| stage | Toffoli-like | share | per call |
+|---|---|---|---|
+| initial_shift (69 controlled lane rotations of reg_a) | 30,912 | 0.5 % | 448 per step, 28,980 of them CSWAP |
+| forward_eea (222 synchronized-EEA steps) | 2,109,450 | 36.8 % | 9,502 per step |
+| chien_forney_mbuc (4,095 positions) | 1,444,737 | 25.2 % | 351 per position |
+| reverse_eea (222 steps, mirror) | 2,109,450 | 36.8 % | 9,502 per step |
+| uncompute_initial_shift | 30,912 | 0.5 % | |
+
+Inside one EEA step (9,502): `multiply_and_add_or_sub` 7,267 (two scaffolded divisions 378 each, then a unary-iteration
+sweep over all 73 slots doing a controlled `ixor_gf2_mul` (75) + CSWAP q_i↔a_i (12) per slot ≈ 6,500), `shift_b_array_right`
+1,069 (72 register CSWAPs + cursor logic), `swap_a_and_b` 893 (full A↔B register CSWAP, 876 + 17), `update_flag` 148,
+`update_metadata` 56, `update_halting_counter` 48. 222 steps = 3(n+1)+9 is a worst-case bound on EEA sub-steps; every
+step runs all 73 slots whether or not the polynomials are that long: this is the 40× that BM removes.
+
+Inside one Forney position (351): `init_gf2_inverse_with_scaffold` of σ' 315 + `flip_if_equal(σ, 0)` 12 + `init_and`/`del_and`
+of the 12-bit `located` register 12 + 12. The Chien update (`gf2_imul` by 69 constants) and the ⟨ω·σ'⁻¹, M_j⟩ kickback are
+free (14.3 M CX over the sweep). 4,095 × 351 = 1,437,345.
+
+### Register map (Q = 1,893) and live ranges
+
+| block | qubits | live |
+|---|---|---|
+| reg_a[3..72] = S0..S69 (syndromes) | 840 | whole circuit (restored at the end) |
+| reg_a[0..2] (3 extra polynomial slots) | 36 | from the setup to the end |
+| reg_b[0..72] (second EEA polynomial array, becomes σ / σ' / ω) | 876 | forward_eea → reverse_eea |
+| degree counters n_A n_B n_a n_b n_q (8 bits each), flag, 2-bit counter, 8-bit halting counter | 51 | setup → end |
+| transient workspace inside an EEA step: q_i 12, division scaffold 60+12, 4 unary cursors 4×8, is_c3/is_hc_zero/ctrl×4/aux/mul/both/nf… | ≤ 90 | within a step |
+
+Live-qubit profile from first/last mention: 11 before `initial_shift`, 869 after it (syndromes + reg_a[0..2] − unmentioned
+lanes), 1,893 from the end of `forward_eea` through `reverse_eea` (the builder recycles freed ids, so every id is in use at
+the EEA peak), back to 869 after `reverse_eea`. 1,893 − 840 = 1,053 workspace qubits: 876 are the second polynomial array,
+87 counters/flags, ≤ 90 EEA-step scratch. The Forney sweep itself only touches 953 ids (σ, σ', ω slots + 72 inverse scratch),
+but reg_b/reg_a stay live underneath it, so Q is set by the EEA, not by the sweep.
