@@ -1,0 +1,9 @@
+created_utc: 2026-10-25T20:40:53Z
+zip: submissions/submission.zip  sha256: 4b676b6d21d363200d6deb96e394f5972c5600b2f555aca1894d1089d040aab8
+invsqrt: circuits/invsqrt/invsqrt_158560_c0910790.kmx  sha256: 9f037a3f78cd5c38b60c2a8101aa6701d1a42130577cbb874f6be6440b2d51d6
+dqi:     circuits/dqi/dqi_1035794640819_d89dfa52.kmb  sha256: d89dfa521d7007539df5ba3743f60c1dfc54b94e04b61cd2f56d2d815508a7f8
+dfthcsos: circuits/dfthcsos/dfthcsos_2581833307_5ff495ce  sha256(angle_k_*,submission.npz): 3eeeacebbb72ffa3086540e8478b423c873d6dfae84841da22a68cc13b1cd087
+kaggle_public_score: not uploaded (superseded by the v20 bundle of 20:46Z; no public score matches 7.3782)
+local_expected_score: 7.3782  (invsqrt 13.098x, dqi 24439463583672.93/1035794640819.0 = 23.595x, dfthcsos 1.300x)
+verifier_runs: runs/invsqrt_158560_c0910790_full.json (0 failures), runs/dqi_1035794640819_d89dfa52_full.json (v19: 9 phase failures, R 1.2261), runs/dfthcsos_2581833307_5ff495ce_full.json
+metric_only_checks: one file per task, angle_k_0..14 gapless, registers named, ids below cap, parts byte-identical to the verified artifacts — checked 2026-10-25
