@@ -415,3 +415,19 @@ toy decoders GF(2⁴) n=8 / GF(2⁶) n=12 unchanged (phase errors only on model-
 −45 % vs v15; static count 1,589,768 (estimate 1,574 k); 92.4 M ops / 860 MB (no growth: fewer products' internal CX
 offset the constants); smoke 2,560 shots 0/0. Remaining T: shears ≈ 0.87 M, sweep 0.37 M, scaling + conversion 0.25 M,
 gap handling + inverses ≈ 0.1 M.
+
+**Failure classes (cell model of the v15/v16 circuit, 102,400 sampled shots, seed 7, `model_cf_gaps.py … cells`):**
+no gap 101,650 ok; one first-order gap: weight 35 → 33 wrong / 1 ok, weight ≤ 34 → 4 wrong / 710 ok; two gaps 2 (both ok).
+So ≈ 37 model-wrong shots per run, of which about half give the right phase by chance — consistent with the 9 and 7
+phase failures observed. Handling the second gap buys nothing; the exact weight-35 gap level (A of degree 2, ≈ +100 k
+Toffolis = +6 %) would recover ≈ 2.3 % of R: not worth it at T ≈ 1.6 M.
+
+**Round-9 levers against R′Q′²T′ < 1.666e12** (R and Q unchanged unless stated):
+
+| lever | estimate | verdict |
+|---|---|---|
+| GF(4096) multiplier 51 → 42: GF(8)⁴ representation, Toom-Cook 4-way with 7 points in GF(8) ∪ {∞}, each point one GF(8) product (rank 6); all basis changes, evaluations and interpolation are GF(2)-linear (free). 42 is the public figure. | 10,979 products/direction × 9 × 2 ≈ −198 k T (−12.5 %) | build first |
+| constant-one register for q₀ in the sweep: accumulate σ(x⁻¹) − 1 into an existing slot and test against 1 | Q 927 → 915 (−2.6 %) | build second |
+| sweep inverse 78 → 66 (norm-based GF(64)² tower, public figure) | −12 × 4,095 ≈ −49 k (−3.1 %) | after the two above |
+| mask projection (−70 sweep positions) | ≈ −6 k (−0.4 %) | later |
+| exact weight-35 gap level | +100 k T for −2.3 % R | no |
