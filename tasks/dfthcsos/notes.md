@@ -204,3 +204,22 @@ the weights' size. The baseline does not need this (only 3 % of its 3,900 column
 fully indefinite) because its columns are tiny (||X||_F 0.046 vs W_rms 0.53); a THC factorisation with ~400 columns
 does. A score-worthy THC fit is therefore a constrained SOS-THC problem: T = sum_c X_c (x) X_c with PSD X_c,
 plus the offsets and the error gate.
+
+Probes of the constrained problem (B 400 points from the direct VarPro fit):
+- Joint L-BFGS with mu Lambda_2 (mu 1e-5 .. 1e-3) and the E_gap target from the unregularised weights: E_gap steers
+  to 3.918 fine, but Lambda stays at ~28,600 (mu 1e-3 trades +30 mHa of error for -10 of Lambda). The least-squares
+  weights are a deep basin; the regularised problem cannot be reached from them by a penalty.
+- SOS-constrained parametrisation (w = v*v, W_c = -tr X_c - t_c^2, `lbfgs_sos`): Lambda is 282-285 and lambda_eff
+  47.2 **by construction** at E_gap 3.92-3.93, i.e. the floor structure is compatible with the gates; but starting
+  from |w| of the unconstrained fit the error is 2.6 Ha and falls only to 1.23 Ha in 600 evaluations. The PSD-column
+  decomposition needs its own initialisation (it is not a sign flip of the eigen-decomposition: cross terms).
+- Unregularised B 496 asymptote: 81 mHa after 3,000 iterations, ~0.3 mHa per 100: heading to ~70, not 15.
+
+Assessment (2026-10-25): the vector-count lever is real and the circuit side is ready (plain QROM at 574 Toffolis /
+120 qubits per circuit), but a from-scratch THC/SOS factorisation that clears error_2 <= 20 mHa with Lambda ~ 290 is
+a multi-day optimisation project on this host (better optimiser: Gauss-Newton/LM on the variable-projection residual;
+an initialisation with PSD columns; 10^5-step refits), with an uncertain outcome; the public results came from GPU
+training (or a public dataset). Options: (a) stop at the verified 1.38x family (training branch) / 1.30x (this branch);
+(b) continue the SOS-THC fit (days); (c) the group-dropping route R 65 -> ~26 on the baseline structure (the training
+session measured 26-55 mHa after short refits for R 62-57; the public recipe uses 100k+ Adam steps per stage, ~12 h
+per stage here); (d) a public factorisation dataset (the user's call).
