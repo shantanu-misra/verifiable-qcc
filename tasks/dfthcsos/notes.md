@@ -86,13 +86,33 @@ loss+gradient natively; gradients checked against finite differences). Findings,
   continuous "retarget" moves (v' = normalise(v - s/lambda P_perp E v), rounded) 4.2 / 12.6 / 27.8 mHa after 8
   sweeps. error_1 is therefore not the binding gate at brot 8; at brot 7 it is still 1.4x over.
 
+- Unfreeze/refreeze rounds (1/8 of the rows made continuous again, re-optimised, re-frozen in 4 sub-batches):
+  19.98 -> 19.81 mHa over 8 rounds; polish sweeps on top: 19.35, 19.06. The words are what limit the error now.
+- brot 8 with the same pipeline (32 batches): 60.1 mHa after the progressive pass, 46.8 after three polish sweeps and
+  a weight refit, 42.1 after a second round (error_1 18.8 with the feedback encoder). The quantisation noise is 4x
+  brot 10's and the compensation mechanisms recover ~2x: **brot 8 (and 7) are out of reach with the baseline
+  factorisation**; the 2x route needs a factorisation trained for coarse angles (lower intrinsic error, sparser rows).
+- lambda_eff lever: the refit lets negmass (the negative spectrum of h1') drift up, which raises E_gap and lambda_eff.
+  A linear negmass penalty (alpha 1e-4) cut lambda_eff 49.98 -> 48.54 for +0.05 mHa but overshot the E_gap floor
+  (3.840 < 3.914898); an L1 penalty on w (mu) lowers Lambda_2 slightly but raises negmass, net worse. Steering E_gap to
+  a target just above the floor with a quadratic penalty alpha (negmass - target)^2 lands exactly: E_gap 3.918016,
+  lambda_eff 49.023 (-1.9 %), error_2 +0.06 mHa. The E_gap floor is what bounds lambda_eff for this factorisation.
+  Pitfall: the word polish linearises the penalty; with the quadratic target a coefficient linearised once per sweep
+  went stale after negmass drifted and one sweep traded 18 -> 102 mHa of real error for phantom penalty gain. The
+  polish now re-linearises every 200 vectors, and the final run polishes without the penalty and re-steers E_gap in
+  the weight refit afterwards.
+- Final brot-10 pipeline: prog (16 batches) -> 2 polish sweeps -> w refit -> 8 refine rounds -> 2 x (3 polish sweeps +
+  w refit) -> E_gap-targeted w refit -> 2 polish sweeps (2 moves per vector) -> targeted w refit -> one-body feedback +
+  8 CD sweeps: error_2 18.079 mHa, error_1 2.335 mHa, E_gap 3.918090, lambda_eff 49.0228 (about 75 min of native CPU).
+
 ## 5. Results (verified, `runs/dfthcsos_*.json`)
 
 | circuits | brot | J | words | lambda_eff | T | Q | score | ratio | run |
 |---|---|---|---|---|---|---|---|---|---|
 | `dfthcsos_3178937006_028667e2` | 12 | 4 | baseline (plain rounding) | 49.301369 | 94,545 | 682 | 3,178,937,005.85 | 1.0556 | `dfthcsos_3178937006_028667e2_full.json` |
 
-| `dfthcsos_2632125690_c68ca4a8` | 10 | 5 | refit v1 (prog 16 batches + 2 polish sweeps + w refit) | 49.977752 | 76,997 | 684 | 2,632,125,689.76 | **1.2749** | `dfthcsos_2632125690_c68ca4a8_full.json` |
+| `dfthcsos_2632125690_c68ca4a8` | 10 | 5 | refit v1 (prog 16 batches + 2 polish sweeps + w refit) | 49.977752 | 76,997 | 684 | 2,632,125,689.76 | 1.2749 | `dfthcsos_2632125690_c68ca4a8_full.json` |
+| `dfthcsos_2581833307_5ff495ce` | 10 | 5 | refit v2 (+ refine, polish, E_gap-targeted w refit) | 49.022820 | 76,997 | 684 | 2,581,833,307.18 | **1.2997** | `dfthcsos_2581833307_5ff495ce_full.json` |
 
 Row 1: error_1 3.185 mHa, error_2 18.640 mHa, 19 circuits of 119 qubits and 2,126 Toffolis (80,788 over both passes),
 0 failures on 254,464 shots. Only the circuit changed; this is the pipeline check.
@@ -100,5 +120,17 @@ Row 2: error_1 10.706 mHa, error_2 **19.982 mHa** (0.02 mHa under the gate; the 
 files, so this is not a seed risk, but the margin is thin), E_gap 4.072132, Lambda 308.7275; 15 circuits of 123 qubits and
 2,128 Toffolis (63,840 both passes); 0 failures. lambda_eff is 1.4 % above the baseline's because the refit lets negmass and
 Lambda drift up; T is 17 % lower (fewer, cheaper lookups), Q 6 % lower (50 instead of 96 persistent word qubits).
+Row 3 (**current best**): error_1 2.335 mHa, error_2 18.079 mHa (1.9 mHa margin), E_gap 3.918090 (floor 3.914898),
+Lambda 308.6438, lambda_eff 49.0228 (0.6 % below the baseline's 49.3014); same 15 circuits of 123 qubits / 2,128 Toffolis
+(the words differ). 0 failures on 254,464 shots. Bundle for upload with
+`scripts/bundle.sh <invsqrt.kmx> <dqi.kmb> circuits/dfthcsos/dfthcsos_2581833307_5ff495ce`.
 The public brot-10 design reports 2.345e9 with lambda_eff 47.5 from its own factorisation; at our lambda_eff the same
-T and Q would give 2.65e9, so the circuit side is at the public level and the remaining gap is the factorisation.
+T and Q would give 2.60e9, so the circuit side is at the public level and the remaining 10 % is the factorisation.
+
+## 6. What would move it further
+
+- A factorisation trained for coarse angles (dfthc-sos Task 1, the starter kit's JAX trainer): lower intrinsic error
+  and/or sparser rows would open brot 8 (1.47x) and brot 7 (2.0x); the public lambda_eff 47.5 is also a training result.
+  Everything here (circuits, refit pipeline, one-body encoder) carries over unchanged to a new `submission.npz`.
+- Circuit side is near its floor for this shape: ~1,990 (unary iteration over A/2 groups) + W + 88 per circuit; only
+  a smaller A (fewer two-body vectors) or wider banks (impossible under the 128-qubit cap for W >= 35) would cut it.

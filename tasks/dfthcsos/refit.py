@@ -154,9 +154,17 @@ class Problem:
         z = np.einsum("rc,rcs->s", self.Wmat, M.reshape(self.R, self.C, NPAIR))
         return self.h1_base - self.sym.to_matrix(z)
 
+    negmass_target: float | None = None  # when set, the alpha term is alpha * (negmass - target)**2
+
+    def negmass_for_egap(self, e_gap: float) -> float:
+        """negmass that gives E_gap = e_gap (E_gap = E_UPPER - esos_const + 2 negmass)."""
+        return 0.5 * (e_gap - (dt.E_UPPER - self.esos_const))
+
     def forward_backward(self, theta_q: np.ndarray, w: np.ndarray, alpha: float = 0.0, mu: float = 0.0,
                          need_grad: bool = True) -> dict:
-        """Loss and gradients at quantised angles theta_q (theta/pi, (R*B, N-1)) and weights w."""
+        """Loss and gradients at quantised angles theta_q (theta/pi, (R*B, N-1)) and weights w.
+
+        alpha weighs negmass linearly, or (negmass - negmass_target)**2 when `negmass_target` is set."""
         u, cache = givens_forward(theta_q, self.edges)
         Us = self.sym.of_outer(u)  # (R*B, NPAIR)
         Usr = Us.reshape(self.R, self.B, NPAIR)
@@ -174,15 +182,20 @@ class Problem:
         E_sos = self.esos_const - 2.0 * negmass
         E_gap = dt.E_UPPER - E_sos
         lam_eff = float(np.sqrt(E_gap * (2 * Lambda - E_gap))) if 0 < E_gap < 2 * Lambda else float("nan")
+        if self.negmass_target is None:
+            pen, alpha_lin = alpha * negmass, alpha
+        else:
+            pen = alpha * (negmass - self.negmass_target) ** 2
+            alpha_lin = 2.0 * alpha * (negmass - self.negmass_target)
         out = {"L2": L2, "error_2": np.sqrt(L2), "negmass": negmass, "Lambda": Lambda, "E_gap": E_gap,
-               "lambda_eff": lam_eff, "lambda2": lam2, "loss": L2 + alpha * negmass + mu * lam2,
+               "lambda_eff": lam_eff, "lambda2": lam2, "loss": L2 + pen + mu * lam2, "alpha_lin": alpha_lin,
                "u": u, "Us": Us, "M": M, "Res": Res, "lam": lam, "V": V}
         if not need_grad:
             return out
         dM = 4.0 * (M @ Res)  # (R*C, NPAIR)
-        if alpha:
+        if alpha_lin:
             Pneg = V[:, neg] @ V[:, neg].T
-            dM += alpha * np.einsum("rc,s->rcs", self.Wmat, self.sym.of_matrix(Pneg)).reshape(self.R * self.C, NPAIR)
+            dM += alpha_lin * np.einsum("rc,s->rcs", self.Wmat, self.sym.of_matrix(Pneg)).reshape(self.R * self.C, NPAIR)
         dMr = dM.reshape(self.R, self.C, NPAIR)
         dw = np.matmul(Usr, dMr.transpose(0, 2, 1))
         if mu:
@@ -462,9 +475,9 @@ def refine(prob: Problem, theta: np.ndarray, w: np.ndarray, brot: int, rounds: i
 
 
 def polish(prob: Problem, words2: np.ndarray, w: np.ndarray, brot: int, sweeps: int = 1, alpha: float = 0.0,
-           moves=(1, -1), log=log, order_seed: int = 0) -> np.ndarray:
-    """Greedy best single-word move per vector per sweep, scored with the exact change of error_2^2
-    (plus alpha * first-order change of negmass)."""
+           moves=(1, -1), log=log, order_seed: int = 0, max_moves: int = 1) -> np.ndarray:
+    """Greedy best single-word move per vector per sweep (up to `max_moves` accepted in a row per vector),
+    scored with the exact change of error_2^2 (plus alpha * first-order change of negmass)."""
     words2 = words2.copy()
     modulus = 1 << brot
     sym = prob.sym
@@ -481,13 +494,22 @@ def polish(prob: Problem, words2: np.ndarray, w: np.ndarray, brot: int, sweeps: 
     for sweep in range(sweeps):
         t0 = time.time()
         # refresh P_neg for the first-order negmass term
-        neg_vec = None
-        if alpha:
+        neg_vec, alpha_lin = None, 0.0
+
+        def relinearise():
+            # first-order negmass term; with a quadratic target the coefficient depends on the current negmass,
+            # so it is refreshed every 200 vectors (a stale coefficient lets the sweep trade error for penalty)
             h1p = prob.h1_prime_from_M(M.reshape(prob.R * prob.C, NPAIR), w)
             lam, V = np.linalg.eigh(h1p)
-            neg_vec = sym.of_matrix(V[:, lam < 0] @ V[:, lam < 0].T)
+            negmass = float(-lam[lam < 0].sum())
+            return (sym.of_matrix(V[:, lam < 0] @ V[:, lam < 0].T),
+                    alpha if prob.negmass_target is None else 2.0 * alpha * (negmass - prob.negmass_target))
+
         accepted, gain = 0, 0.0
-        for b in rng.permutation(prob.R * prob.B):
+        for ib, b in enumerate(rng.permutation(prob.R * prob.B)):
+          if alpha and ib % 200 == 0:
+              neg_vec, alpha_lin = relinearise()
+          for _rep in range(max_moves):
             rho, bb = divmod(b, prob.B)
             wb = w[rho, bb, :]  # (C,)
             y = wb @ M[rho]  # (NPAIR,) = sum_c w_bc M[rho, c]
@@ -504,18 +526,19 @@ def polish(prob: Problem, words2: np.ndarray, w: np.ndarray, brot: int, sweeps: 
             yy = float(y @ y)
             dH2 = 2 * yy * dd + 2 * yd ** 2 + k * k * dd ** 2 + 4 * k * yd * dd
             dL = 4 * yRd + 2 * k * dRd + dH2
-            if alpha:
-                dL = dL + alpha * float(prob.Wmat[rho] @ wb) * (delta @ neg_vec)
+            if alpha_lin:
+                dL = dL + alpha_lin * float(prob.Wmat[rho] @ wb) * (delta @ neg_vec)
             i = int(np.argmin(dL))
-            if dL[i] < -1e-15:
-                dlt = delta[i]
-                words2[b] = cand[i]
-                Us[b] += dlt
-                M[rho] += np.outer(wb, dlt)
-                Res += np.outer(y, dlt) + np.outer(dlt, y) + k * np.outer(dlt, dlt)
-                L2 += 4 * yRd[i] + 2 * k * dRd[i] + dH2[i]
-                accepted += 1
-                gain += dL[i]
+            if dL[i] >= -1e-15:
+                break
+            dlt = delta[i]
+            words2[b] = cand[i]
+            Us[b] += dlt
+            M[rho] += np.outer(wb, dlt)
+            Res += np.outer(y, dlt) + np.outer(dlt, y) + k * np.outer(dlt, dlt)
+            L2 += 4 * yRd[i] + 2 * k * dRd[i] + dH2[i]
+            accepted += 1
+            gain += dL[i]
         log(f"polish sweep {sweep}: {accepted} moves, e2 {1e3*np.sqrt(max(L2, 0)):.3f} mHa "
             f"(dL {gain:.3e}, {time.time()-t0:.0f}s)")
         if not accepted:
@@ -575,8 +598,13 @@ def main() -> None:
     ap.add_argument("--lr-w", type=float, default=1e-7)
     ap.add_argument("--alpha", type=float, default=0.0, help="weight of negmass(h1') in the loss")
     ap.add_argument("--mu", type=float, default=0.0, help="weight of Lambda_2 in the loss")
+    ap.add_argument("--egap-target", type=float, default=None,
+                    help="steer E_gap to this value (Ha, > 3.914898): alpha then weighs (negmass - target)^2")
     ap.add_argument("--polish", type=int, default=0, help="coordinate-descent sweeps (after the main phase)")
     ap.add_argument("--polish-rounds", type=int, default=1, help="rounds of (polish sweeps + w refit)")
+    ap.add_argument("--polish-alpha", type=float, default=None, help="polish: negmass weight (default: --alpha)")
+    ap.add_argument("--polish-moves", type=int, default=1, help="polish: word deltas +-1..+-this")
+    ap.add_argument("--polish-max-moves", type=int, default=1, help="polish: accepted moves in a row per vector")
     ap.add_argument("--one-body-sweeps", type=int, default=3)
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
@@ -591,6 +619,9 @@ def main() -> None:
         theta = dt.decompose(fac.U.reshape(-1, N), fac.edges)
         w = fac.w.copy()
     brot = args.brot
+    if args.egap_target is not None:
+        prob.negmass_target = prob.negmass_for_egap(args.egap_target)
+        log(f"E_gap target {args.egap_target} -> negmass target {prob.negmass_target:.6f}")
     words2 = quantize_theta(theta, brot)[0]
     m, _ = exact_eval(prob, words2, w, brot, one_body_sweeps=0)
     log(f"start (plain rounding of init): {dt.fmt(m)}")
@@ -614,7 +645,9 @@ def main() -> None:
         m, _ = exact_eval(prob, words2, w, brot, one_body_sweeps=0)
         log(f"after {args.mode}: {dt.fmt(m)}")
     for rnd in range(args.polish_rounds if args.polish else 0):
-        words2 = polish(prob, words2, w, brot, sweeps=args.polish, alpha=args.alpha)
+        mv = tuple(d for k in range(1, args.polish_moves + 1) for d in (k, -k))
+        pa = args.alpha if args.polish_alpha is None else args.polish_alpha
+        words2 = polish(prob, words2, w, brot, sweeps=args.polish, alpha=pa, moves=mv, max_moves=args.polish_max_moves)
         theta = words2 / (1 << (brot - 1))
         theta, w, _ = lbfgs(prob, theta, w, opt_theta=False, opt_w=True, alpha=args.alpha, mu=args.mu, maxiter=args.iters, tag=f"[w after polish {rnd}]")
         m, _ = exact_eval(prob, words2, w, brot, one_body_sweeps=0)
