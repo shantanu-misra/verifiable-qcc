@@ -109,26 +109,66 @@ class Tower:
                 if self.nusq[r][i]:
                     b.cx(bb[i], N[r])
 
+    _LEAF = None
+
+    @classmethod
+    def _leaf_table(cls):
+        """x^-1 in GF(2^3) as a quadratic map: 3 ANDs x_i x_j plus linear and constant terms per output bit."""
+        if cls._LEAF is None:
+            g = km.GF2Field(3)
+            inv = [0] + [g.pow(x, 6) for x in range(1, 8)]
+            pairs = [(0, 1), (0, 2), (1, 2)]
+            def ev(x, c, d, e):
+                v = e
+                for k, (i, j) in enumerate(pairs):
+                    if (c >> k) & 1: v ^= ((x >> i) & 1) & ((x >> j) & 1)
+                for j in range(3):
+                    if (d >> j) & 1: v ^= (x >> j) & 1
+                return v
+            table = []
+            for r in range(3):
+                sol = next((c, d, e) for c in range(8) for d in range(8) for e in range(2)
+                           if all(ev(x, c, d, e) == (inv[x] >> r) & 1 for x in range(8)))
+                table.append(sol)
+            cls._LEAF = (pairs, table)
+        return cls._LEAF
+
     def _leaf_inv_init(self, b, N):
-        """(inv, t): inv = N^-1 in GF(2^3) as N^2 * N^4 (one 6-Toffoli product). N is left holding N^2 and the
-        3-qubit scaffold t holds N^4 until `_leaf_inv_del` (uncompute is then free)."""
-        g = self.g
-        sq = [[(g.square(1 << i) >> r) & 1 for i in range(3)] for r in range(3)]
-        inv = b.alloc_qubits(3); t = b.alloc_qubits(3)
-        apply_gf2_matrix(b, sq, N)          # N -> N^2
-        b.cx(N, t)                          # t = N^2
-        apply_gf2_matrix(b, sq, t)          # t = N^4
-        self._mul(b, N, t, inv)             # inv = N^6 = N^-1
-        return inv, t
+        """(inv, None): inv = N^-1 in GF(2^3) with 3 Toffolis (x_i x_j terms), erased later by measurement."""
+        pairs, table = self._leaf_table()
+        inv = b.alloc_qubits(3); anc = b.alloc_qubits(1)[0]; bit = b.alloc_bits(1)
+        for k, (i, j) in enumerate(pairs):
+            b.ccx(N[i], N[j], anc)
+            for r, (c, d, e) in enumerate(table):
+                if (c >> k) & 1:
+                    b.cx(anc, inv[r])
+            b.hmr(anc, bit[0]); b.push_condition(bit[0]); b.cz(N[i], N[j]); b.pop_condition()
+        for r, (c, d, e) in enumerate(table):
+            for j in range(3):
+                if (d >> j) & 1:
+                    b.cx(N[j], inv[r])
+            if e:
+                b.x(inv[r])
+        b.free(anc); b.free(bit)
+        return inv, None
 
     def _leaf_inv_del(self, b, N, inv, t):
-        g = self.g
-        sq = [[(g.square(1 << i) >> r) & 1 for i in range(3)] for r in range(3)]
-        b.del_gf2_mul(N, t, target=inv, field=g)
-        apply_gf2_matrix(b, gf2_matrix_inverse(sq), t)
-        b.cx(N, t)                          # t = 0
-        apply_gf2_matrix(b, gf2_matrix_inverse(sq), N)   # N restored
-        b.free(t); b.free(inv)
+        """Erase inv = N^-1 with 0 Toffolis: X-measure each bit, fix the phase with CZ/Z on N (quadratic form)."""
+        pairs, table = self._leaf_table()
+        bits = b.alloc_bits(3)
+        for r, (c, d, e) in enumerate(table):
+            if e:
+                b.x(inv[r])                   # remove the constant so the fixup is a pure quadratic form
+            b.hmr(inv[r], bits[r])
+            b.push_condition(bits[r])
+            for k, (i, j) in enumerate(pairs):
+                if (c >> k) & 1:
+                    b.cz(N[i], N[j])
+            for j in range(3):
+                if (d >> j) & 1:
+                    b.z(N[j])
+            b.pop_condition()
+        b.free(bits); b.free(inv)
 
     def _sub_inv_init(self, b, N, gate=None):
         """(Ninv, scaffold) for the subfield; with `gate`, Ninv = gate * N^-1 (gating is pushed to the smallest field)."""
@@ -239,7 +279,7 @@ class Tower:
 
 
 def Tower12() -> Tower:
-    """GF(2^12) -> GF(2^6) -> GF(2^3) tower (GF(2^3) inverse by kickmix, 7 Toffolis)."""
+    """GF(2^12) -> GF(2^6) -> GF(2^3) tower: 15-AND GF(64) products, 3-AND GF(8) inverse (66 Toffolis ungated)."""
     return Tower(12, sub=Tower(6))
 
 

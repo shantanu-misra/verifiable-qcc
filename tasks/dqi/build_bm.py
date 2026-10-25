@@ -422,6 +422,7 @@ class BMDecoder:
         A2, W = self.A2, self.W
         odd = [A2[k] for k in range(1, t + 1, 2)]
         even = [A2[k] for k in range(2, t + 1, 2)]
+        acc = A2[0] if A2[0] is not None else even[0]     # A2[0] None: q_0 = 1 is implicit (CF decoder)
         z = b.alloc_qubits(1)[0]
         located = b.alloc_qubits(self.deg)
         is_err = b.alloc_bits(1)
@@ -434,11 +435,14 @@ class BMDecoder:
                 for r in odd[1:]:
                     b.cx(r, A2[1])
                 for r in even:
-                    b.cx(r, A2[0])
-                b.cx(A2[1], A2[0])
+                    if r is not acc:
+                        b.cx(r, acc)
+                b.cx(A2[1], acc)
                 for r in W[1:]:
                     b.cx(r, W[0])
-                ladder = self.is_zero_open(A2[0], z)
+                if A2[0] is None:
+                    b.x(acc[0])                       # acc = sigma(X^-1) + 1: test against 1
+                ladder = self.is_zero_open(acc, z)
                 if self.tower is not None:
                     inv, sc = self.tower.init_inverse_with_scaffold(b, A2[1], gate=z)   # z / T
                 else:
@@ -453,12 +457,15 @@ class BMDecoder:
                 if j % order:
                     b.gf2_idiv(gf.pow(alpha, (-j) % order), target=inv, field=gf)
                 self.inv_del(A2[1], inv, sc)
-                self.is_zero_close(A2[0], z, ladder)
+                self.is_zero_close(acc, z, ladder)
+                if A2[0] is None:
+                    b.x(acc[0])
                 for r in W[1:]:
                     b.cx(r, W[0])
-                b.cx(A2[1], A2[0])
+                b.cx(A2[1], acc)
                 for r in even:
-                    b.cx(r, A2[0])
+                    if r is not acc:
+                        b.cx(r, acc)
                 for r in odd[1:]:
                     b.cx(r, A2[1])
                 b.pop_condition()

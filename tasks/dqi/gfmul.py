@@ -50,31 +50,40 @@ def karatsuba_terms(n: int, lo: int = 0) -> list[tuple[list[int], list[int], lis
 
 
 class GFMul:
-    def __init__(self, field: km.GF2Field):
+    def __init__(self, field: km.GF2Field, algorithm: str = 'best'):
         self.gf = field
         self.n = field.degree
         assert self.n in (3, 6, 12)
-        self.terms = karatsuba_terms(self.n)
         # reduction: polynomial coefficient c_k (k < 2n-1) -> field element x^k mod modulus
         self.red = [field.mod(1 << k) if hasattr(field, 'mod') else None for k in range(2 * self.n - 1)]
         if self.red[0] is None:
             raise RuntimeError('field.mod missing')
+        if self.n == 12 and algorithm in ('best', 'toom42'):
+            from mul42 import build_terms                 # 42 ANDs: GF(8)^4 Toom-Cook (notes §10)
+            self.terms = build_terms(field)
+        elif self.n == 6 and algorithm in ('best', 'toom15'):
+            from mul42 import build_terms6                # 15 ANDs: GF(4)^3 Toom-Cook
+            self.terms = build_terms6(field)
+        else:                                             # Karatsuba 12 -> 6 -> 3: 51 ANDs
+            self.terms = []
+            for L, R, outs in karatsuba_terms(self.n):
+                mask = 0
+                for o in outs:
+                    mask ^= self.red[o]
+                self.terms.append((L, R, mask))
 
     def ixor_mul(self, b: km.CircuitBuilder, x, y, target, anc=None, bits=None) -> None:
         own = anc is None
         if own:
             anc = b.alloc_qubits(1)[0]
             bits = b.alloc_bits(1)
-        for L, R, outs in self.terms:
+        for L, R, mask in self.terms:
             # bring the linear forms into x[L[0]] and y[R[0]]
             for i in L[1:]:
                 b.cx(x[i], x[L[0]])
             for i in R[1:]:
                 b.cx(y[i], y[R[0]])
             b.ccx(x[L[0]], y[R[0]], anc)
-            mask = 0
-            for o in outs:
-                mask ^= self.red[o]
             for k in range(self.n):
                 if (mask >> k) & 1:
                     b.cx(anc, target[k])

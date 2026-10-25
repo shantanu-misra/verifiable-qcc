@@ -431,3 +431,49 @@ Toffolis = +6 %) would recover ≈ 2.3 % of R: not worth it at T ≈ 1.6 M.
 | sweep inverse 78 → 66 (norm-based GF(64)² tower, public figure) | −12 × 4,095 ≈ −49 k (−3.1 %) | after the two above |
 | mask projection (−70 sweep positions) | ≈ −6 k (−0.4 %) | later |
 | exact weight-35 gap level | +100 k T for −2.3 % R | no |
+
+**Built (round 9a).** `mul42.py`: GF(4096) = GF(8)[y]/(g) with g the minimal polynomial of α over GF(8) = ⟨γ = α⁵⁸⁵⟩,
+GF(2)-basis γʲαⁱ; Toom-Cook at {0, 1, γ, γ², γ³, γ⁴, ∞}, each point product the 6-AND GF(8) Karatsuba; evaluation,
+interpolation (6×6 Vandermonde inverse plus the ∞ correction), reduction and both basis changes composed into 42 terms
+(xbits, ybits, out-mask) — verified on 2,000 random pairs and in the circuit (0/256 wrong, inputs undisturbed, no phase
+flips). `GFMul` now takes mask terms (Karatsuba 51 kept as `algorithm='karatsuba'`). Reciprocal n = 69: 25,368 Toffolis.
+Sweep: `A2[0] = None` makes q₀ implicit — the sums accumulate into the first even slot and the root test is acc == 1
+(X on bit 0 around the ladder); toy decoders exact, toy Q −6 (−12 at full scale).
+
+**Built (round 9b): 66-Toffoli tower inverse.** GF(64) products by a 15-AND GF(4)³ Toom-Cook algorithm
+(`mul42.build_terms6`, exhaustive check on all 4,096 pairs), and the GF(8) inverse as a quadratic map with the three
+ANDs x₀x₁, x₀x₂, x₁x₂ (search `build/search_inv8.py`), erased by X-measurement with CZ/Z fixups (0 Toffolis, no
+scaffold). Inverse = ab (15) + GF(64) inverse (6 + 3 + 12 = 21) + two GF(64) products (30) = 66; gated 69 (was 78).
+tower.py self-test: inverse+del 66, gated 69, compact 102, all exact, no phase flips. Expected −12 × 4,095 ≈ −49 k on the
+sweep plus ≈ 1.7 k on the extraction/conversion inverses.
+
+**v17 = `dqi_1457063322771_23f3768d.kmb` (42-Toffoli multiplier, implicit q₀): full PASS, score 1.4571e12 (16.77×),
+Q 915, T 1,392,254.13, 0 value / 18 phase failures (R 1.2500)** — `runs/dqi_1457063322771_23f3768d_full.json`.
+−12.6 % vs v16. 18 failures ≈ the model's 37 wrong shots × ½ (random phase), so v15/v16's 9 and 7 were the lucky end:
+the weight-35 gap class now costs ≈ 5 % in R.
+
+**Round 9c estimate — paired extraction (two levels per reciprocal).** With f = c·u, a₁ = f₁/c, the second-level
+input is h = w/f where x²w = c − (1 + a₁x)f, i.e. w_m = f_{m+2} + a₁f_{m+1} (one product per cell, in place). Then
+c' = w₀/c, a'₁ = w₁/(cc') + a₁, and the next window is h'' = q₂, q₃, … with q = s/(1 + a₁x), s = (w₀/w) − c'x²: one
+reciprocal chain on w/w₀ (window L−3) plus two linear recurrences (one product per cell each). Checked against two
+ordinary levels of the exact model (`build/model_pairs.py`, 0/200 mismatches). Per pair ≈ 3L + R(L−2) products instead
+of 2L + R(L) + R(L−2): one way 9,789 → 6,625 (scaling + shears), −3,164 products ≈ −266 k Toffolis (−20 % of v18's T).
+Records land in the same cells (c, a₁ | c', a'₁), so conversion and the gap pointer are unchanged; a level-B gap
+(w₀ = 0, w₁ ≠ 0) rotates the w cells exactly like the ordinary rotation (h/x = (w/x)/f). The "+a₁" terms must be
+gated by [cc' ≠ 0] so a terminal (zero) level B still yields a'₁ = 0 (12 CCX each). Peak Q unchanged if the two
+inverses (c, then cc') are not held together and both are released before the reciprocal.
+
+**v18 = `dqi_1393661418529_31bc11f2.kmb` (66-Toffoli tower inverse): full PASS, score 1.3937e12 (17.54×), Q 912,
+T 1,354,166.27, 0 value / 13 phase failures (R 1.2374)** — `runs/dqi_1393661418529_31bc11f2_full.json`. −4.4 % vs v17.
+
+**Built (round 9c): paired extraction** (`CFDecoder.pair`, 17 pairs + one single level). Two gap subtleties found by
+the cell tests: after a level-B rotation (w → w/x) the identity reads x³w̃ = c − (1 + a₁x)f, so the −c' correction
+moves from s₂ to s₃ (controlled on [ptr = k+2], 24 CCX per pair) and must not land on a parked end cell (L = 6);
+and the "+a₁" terms are gated by [cc' ≠ 0 ∧ W[3] real] so a parked W[3] (L = 4 after a gap) keeps a'₁ = 0 like the
+plain scheme. Toy cells+pointer tests (GF(2⁴) n = 8, 12; GF(2⁶) n = 10): every model-right input matches; full toy
+decoders 0 value errors and phase errors only on model-wrong inputs; full window n = 70 extract+convert exact on 8 shots,
+342,050 Toffolis one way, peak 912 qubits.
+
+**v19 = `dqi_1035794640819_d89dfa52.kmb` (paired extraction): full PASS, score 1.0358e12 (23.59×), Q 912,
+T 1,015,714.03, 0 value / 9 phase failures (R 1.2261)** — `runs/dqi_1035794640819_d89dfa52_full.json`. −25.7 % vs v18;
+67.5 M ops. T is now at the public band (1.08–1.12 M) and below it.
