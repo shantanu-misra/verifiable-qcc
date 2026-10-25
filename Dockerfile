@@ -21,6 +21,9 @@ RUN pip install numpy pytest kaggle
 COPY third_party/Qualtran/kickmix /opt/kickmix-src
 RUN pip install /opt/kickmix-src
 
+# The dfthcsos verifier also needs scipy (linear_sum_assignment); separate layer so kickmix stays cached.
+RUN pip install scipy
+
 # Our repo is bind-mounted at /work by docker-compose; nothing else is baked in.
 # To use the Kaggle-provided binary instead of the source build:
 #   PYTHONPATH=/work/data/kickmix python ...

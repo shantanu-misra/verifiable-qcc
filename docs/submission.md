@@ -2,7 +2,7 @@
 
 ## Packaging
 
-`scripts/bundle.sh <invsqrt circuit|baseline> <dqi circuit|baseline> [out.zip]` → `submissions/submission.zip`
+`scripts/bundle.sh <invsqrt circuit|baseline> <dqi circuit|baseline> [circuits/dfthcsos/<dir>|baseline] [out.zip]` → `submissions/submission.zip`
 (default name; Kaggle accepts any) plus a timestamped sidecar `submissions/submission_<utc>.txt` with the zip and
 circuit hashes. Required layout (Overview › Submission File): `invsqrt.kmb|kmx`, `dqi.kmb|kmx`,
 `dfthcsos/angle_k_0..angle_k_<n-1>.kmb|kmx` (gapless) + `dfthcsos/submission.npz`. `.kmx` is accepted for circuits.

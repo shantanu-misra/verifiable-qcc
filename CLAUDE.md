@@ -13,11 +13,13 @@ mean of per-task improvement over the reference, `Score = (∏_b cost_ref_b / co
 |---|---|---|---|
 | **invsqrt** (fusion, Benchmark I) | phase `\|x⟩` by e^{2πi/√x} for every x in 1..3,133,452; cost Q×C | 1 | `docs/invsqrt.md` |
 | **dqi** (optimisation, Benchmark II) | reversible RS(4095,4025) syndrome decoder over GF(2¹²); cost R(ε⁺)×Q²×T | 2 | `docs/dqi.md` |
-| **dfthcsos** (chemistry, Benchmark III) | FeMoCo angle-loading QROMs; cost λ_eff×T×Q | none — **submit the baseline unchanged** | `data/verifiers/dfthcsos/SCORING_README.md` |
+| **dfthcsos** (chemistry, Benchmark III) | FeMoCo angle-loading QROMs; cost λ_eff×T×Q | 3 | `tasks/dfthcsos/notes.md` (spec: `data/verifiers/dfthcsos/SCORING_README.md`) |
 
-Verified baselines (official verifiers, this repo's Docker image, 2026-10-23): invsqrt **2,076,774.23**, dqi **2.444e13**
-— `runs/*_baseline_full.json`, recomputed in `results/verifier_checks.md`. In both tasks **Q = `circuit.num_qubits`** (every
-distinct qubit id mentioned, not peak allocation — reuse ids), T = mean Toffoli-like gates executed per shot. `data/verifiers/` is the spec.
+Verified baselines (official verifiers, this repo's Docker image, 2026-10-23): invsqrt **2,076,774.23**, dqi **2.444e13**,
+dfthcsos **3,355,599,588.32** — `runs/*_baseline_full.json`, recomputed in `results/verifier_checks.md`. In invsqrt/dqi
+**Q = `circuit.num_qubits`** (every distinct qubit id mentioned, not peak allocation — reuse ids), T = mean Toffoli-like gates
+executed per shot. dfthcsos scores a *family* of QROM circuits plus the factorisation they load (`tasks/dfthcsos/notes.md`:
+cost model, the 128-qubit cap, why the angle width needs a quantisation-aware refit). `data/verifiers/` is the spec.
 
 ## Directory layout
 
@@ -30,22 +32,25 @@ data/                      # Kaggle competition data, gitignored: sample_submiss
 third_party/Qualtran/      # git submodule, pinned; only kickmix/ and docs/kickmix/ matter
 runs/                      # raw verifier JSON outputs (committed): the evidence behind every score
 results/                   # verifier negative checks and other recorded experiments
-tasks/<task>/              # generators (Python, km.CircuitBuilder) + notes.md; dfthcsos is baseline passthrough
-circuits/<task>/           # committed .kmx/.kmb outputs, named <task>_<cost>_<shortsha>.kmx
+tasks/<task>/              # generators (Python, km.CircuitBuilder) + notes.md; dfthcsos: build_qrom.py + refit.py (native numpy)
+circuits/<task>/           # committed .kmx/.kmb outputs, named <task>_<cost>_<shortsha>.kmx (dfthcsos: a directory)
 submissions/               # zipped bundles actually uploaded + sidecar .txt with the Kaggle score
-scripts/                   # verify.sh (official verifier in Docker → runs/), bundle.sh (zip), verifier_checks.py (→ results/)
+scripts/                   # verify.sh (official verifier in Docker → runs/), bundle.sh (zip; 3rd arg = dfthcsos dir), verifier_checks.py
 ```
 
 ## Build and run (Docker)
 
 Qualtran ships no Dockerfile; ours `pip install`s `third_party/Qualtran/kickmix` (pybind11 2.12.0, C++20,
-Python ≥ 3.10, numpy) from the submodule pinned at **`638777fac4379bc62e2a1e4a52cf1a1753895d48`** (2026-10-22,
+Python ≥ 3.10, numpy; plus scipy for the dfthcsos verifier) from the submodule pinned at **`638777fac4379bc62e2a1e4a52cf1a1753895d48`** (2026-10-22,
 kickmix 0.1), forced to `linux/amd64`. The source build reproduces the paper's baseline stats exactly.
 ```bash
 git submodule update --init --depth 1              # once, after clone
 docker compose build                                # minutes under emulation on Apple Silicon
 docker compose run --rm -T dev python <script.py>   # cwd is /work; -T for non-interactive use
 ```
+A git worktree has no `data/` or submodule checkout: put `VQCC_DATA=/abs/path/to/verifiable-qcc/data` in a gitignored `.env`
+and build the image with the main checkout as context (`docker build --platform linux/amd64 -t verifiable-qcc:dev -f Dockerfile <main checkout>`).
+The dfthcsos metric math (no kickmix) also runs natively: `tasks/dfthcsos/dfthc_tools.py` needs only numpy/scipy.
 The Kaggle-shipped `data/kickmix/kickmix.so` needs `GLIBCXX_3.4.32` (gcc ≥ 13) and does not load on bookworm;
 TODO only if a discrepancy ever appears: rebuild on a trixie/ubuntu-24.04 base and compare.
 
@@ -54,6 +59,7 @@ TODO only if a discrepancy ever appears: rebuild on a trixie/ubuntu-24.04 base a
 ```bash
 scripts/verify.sh invsqrt circuits/invsqrt/<file>.kmx [--max-x 4096]   # full ≈4 min; --max-x = smoke test only
 scripts/verify.sh dqi     circuits/dqi/<file>.kmb [--max-workers 2]     # ≈3.5 min
+scripts/verify.sh dfthcsos circuits/dfthcsos/<dir>                      # dir = angle_k_*.kmb + submission.npz, ≈4 min
 ```
 Wraps `docker compose run … python data/verifiers/<task>/verify_submission_<task>.py <circuit> [args]` and saves
 the JSON to `runs/`. PASS → `{"status":"PASS","score":…}` (score = per-task cost, lower is better); FAIL → exit 1
@@ -84,7 +90,7 @@ ancillas fail. Z_POW exponent t phases by e^{iπt} at 2⁻¹²⁷ precision — 
    `invsqrt: Q=240 T=7100 C=7102.3 cost=1.70e6 (verifier pass, 0 failures)`, generator code in the same commit.
    Uploaded submissions get their public LB score recorded in `submissions/`.
 4. Follow the kickmix contract: inputs restored, scratch back to |0⟩, phase within tolerance. `R`/`HMR` tricks are
-   fine only if the verifier accepts them. dfthcsos stays at baseline (ratio 1.0).
+   fine only if the verifier accepts them.
 5. No private code sharing outside the team; anything shared goes to the public forum (Kaggle rule C.5.d).
 
 ## Links
