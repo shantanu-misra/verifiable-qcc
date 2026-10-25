@@ -636,3 +636,87 @@ def symmetric_nmf(Z: np.ndarray, C: int, iters: int = 2000, seed: int = 0, log=l
         if it % 500 == 0 or it == iters - 1:
             log(f"  snmf{tag} it {it:5d}: ||Z - VV^T|| / ||Z|| = {np.linalg.norm(Zp - V @ V.T) / np.linalg.norm(Zp):.4e}")
     return V
+
+
+# ---------------------------------------------------------------------------------------------
+# Levenberg-Marquardt on the full (u, w, W) problem for any (R, B, C): residuals R_H = T - H (Frobenius) and
+# r_gap = sqrt(a_gap) (E_gap - target); matrix-free J / J^T products, CG on the damped normal equations.
+
+
+def gn_joint(prob: THCProblem, u: np.ndarray, w: np.ndarray, W: np.ndarray, iters: int = 20, cg_iters: int = 20,
+             lam: float = 1e-2, tag: str = "", log=log, opt_W: bool = True):
+    sym = prob.sym
+    R, B, C = w.shape
+    sq = np.sqrt(prob.a_gap) if prob.a_gap else 0.0
+    f_prev = None
+    t0 = time.time()
+    for it in range(iters):
+        r = prob.forward_backward_u(u, w, 0.0, 0.0, True, W=W)
+        f = r["loss"]
+        if f_prev is None:
+            log(f"  gnj{tag} start: e2 {1e3*r['error_2']:.3f} mHa  E_gap {r['E_gap']:.4f}  loss {f:.4e}")
+        Us = r["Us"].reshape(R, B, -1)
+        M = r["M"].reshape(R, C, -1)
+        lam_h, V = r["lam"], r["V"]
+        neg = lam_h < 0
+        sP = sym.of_matrix(V[:, neg] @ V[:, neg].T)  # (NPAIR,)
+        sPX = M @ sP  # (R, C) = <P_neg, X_rc>
+        Wm = prob.Wmat
+
+        def Jd(du, dw, dW):
+            dUs = _dU(sym, u, du).reshape(R, B, -1)
+            dM = np.matmul(dw.transpose(0, 2, 1), Us) + np.matmul(w.transpose(0, 2, 1), dUs)  # (R, C, NPAIR)
+            dM2 = dM.reshape(R * C, -1)
+            A = dM2.T @ r["M"]
+            JH = -(A + A.T)
+            dgap = 0.0
+            if sq:
+                dgap = float(np.sum(Wm * dW)) + 2.0 * (float(np.sum(dW * sPX)) + float(np.sum(Wm[:, :, None] * dM * sP)))
+            return JH, sq * dgap
+
+        def JtS(S, rho):
+            SM = -2.0 * (r["M"] @ S).reshape(R, C, -1)  # adjoint of J_H on dM
+            if sq:
+                SM += (rho * sq * 2.0) * Wm[:, :, None] * sP[None, None, :]
+            dw_adj = np.matmul(Us, SM.transpose(0, 2, 1))  # (R, B, C)
+            dUs_adj = np.matmul(w, SM).reshape(R * B, -1)
+            du_adj = sym.grad_outer(dUs_adj, u)
+            dW_adj = (rho * sq) * (Wm + 2.0 * sPX) if sq else np.zeros_like(Wm)
+            return du_adj, dw_adj, dW_adj
+
+        def JtJ(du, dw, dW):
+            S, rho = Jd(du, dw, dW)
+            a, b, c = JtS(S, rho)
+            return a + lam * du, b + lam * dw * (rf.W_SCALE ** -2) * 0 + lam * dw, (c + lam * dW) if opt_W else np.zeros_like(dW)
+
+        rhs = (-0.5 * r["du"], -0.5 * r["dw"], (-0.5 * r["dW"]) if opt_W else np.zeros_like(W))
+        x = tuple(np.zeros_like(v) for v in rhs)
+        res = tuple(b - a for a, b in zip(JtJ(*x), rhs))
+        p = tuple(v.copy() for v in res)
+        rs = sum(np.sum(v * v) for v in res)
+        rhs_norm = np.sqrt(sum(np.sum(v * v) for v in rhs))
+        for k in range(cg_iters):
+            Ap = JtJ(*p)
+            pAp = sum(np.sum(a * b) for a, b in zip(p, Ap))
+            alpha = rs / max(pAp, 1e-300)
+            x = tuple(a + alpha * b for a, b in zip(x, p))
+            res = tuple(a - alpha * b for a, b in zip(res, Ap))
+            rs_new = sum(np.sum(v * v) for v in res)
+            if np.sqrt(rs_new) < 1e-8 * rhs_norm:
+                break
+            p = tuple(a + (rs_new / rs) * b for a, b in zip(res, p))
+            rs = rs_new
+        u_t, w_t, W_t = u + x[0], w + x[1], (W + x[2]) if opt_W else W
+        r_t = prob.forward_backward_u(u_t, w_t, 0.0, 0.0, False, W=W_t)
+        if r_t["loss"] < f:
+            u, w, W = u_t, w_t, W_t
+            lam = max(lam / 3.0, 1e-10)
+            ok = True
+        else:
+            lam *= 10.0
+            ok = False
+        f_prev = f
+        log(f"  gnj{tag} it {it:3d}  e2 {1e3*(r_t if ok else r)['error_2']:8.3f} mHa  E_gap {(r_t if ok else r)['E_gap']:.4f}  "
+            f"lam {lam:.1e} {'ok' if ok else 'rejected'} cg {k+1}  ({time.time()-t0:.0f}s)")
+    prob.set_W(W)
+    return u, w, W

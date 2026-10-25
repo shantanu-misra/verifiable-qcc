@@ -273,3 +273,7 @@ renormalise the rows and multiply w_bc by |u_b|^2 (`prune.normalise_state`; a fi
 mis-reported 383 -> 646 mHa). The E_gap term's gradient through negmass now enters the single adjoint pass
 (`Problem.extra_dM` hook): 0.37 s per loss+gradient at (65, 60, 60), 1.5x faster. Within-group pruning after 400
 joint iterations: B 48 383 mHa, B 40 703, B 32 1,114 (confirms it is the wrong lever).
+`thc_fit.gn_joint`: Levenberg-Marquardt on (u, w, W) for any (R, B, C) with the Frobenius residual plus the E_gap
+residual, matrix-free Jacobian products (adjoint exact to 1e-15), CG on the damped normal equations: ~12 s per step
+at (65, 60, 60) with 15 CG iterations. On the baseline it moves 16.133 -> 15.80 mHa in 6 steps (L-BFGS: 15.69 after
+400 iterations), i.e. the baseline is at its local minimum; the test that matters is on the dropped-group states.
