@@ -301,3 +301,12 @@ group dropping with per-stage checkpoints. Speed at (65, 60, 45): **MPS 24.1 Ada
 `kaggle/train_kaggle.py` (metadata: private, GPU, competition data + starter kit attached, checkpoints to
 /kaggle/working/stage_R<R>.npz); block variable projection was parked (its CG does not converge on the dyad Gram,
 186 s per evaluation, and the unconstrained G is not PSD).
+Optimiser findings on the GPU: Adam at the public lr 2e-3 explodes (1.4 Ha) because its per-coordinate step is 80 % of
+a weight (w ~ 0.0025); with weights at 1/100 of the rate and lr 1e-3 it still oscillates (212 -> 1,670 -> 217 mHa over
+7k steps). torch L-BFGS on MPS runs at 14.5 evaluations/s (6.6x numpy) and reaches 45 mHa in 1,200 evaluations, then
+stalls: in float32 the rounding of H's entries (~3e-6 for entries of order 7) is a third of the residual per entry
+(~1e-5), so the strong-Wolfe line search cannot resolve further decrease. MPS has no float64. Consequences: on the Mac
+GPU only low-lr Adam (3e-4 -> 3e-6) is usable; on a Kaggle P100 (4.7 TFLOPS float64) float64 L-BFGS is the right
+mode (the kernel selects it by GPU name; a T4 falls back to float32 Adam). The Kaggle kernel `shantanumisra/dfthcsos-train`
+v1 errored at once (data layout: the kernel now locates the FCIDUMP and sample under /kaggle/input); v2 is built and
+smoke-tested but its push needs the user's permission (the harness classifies it as an external write).
