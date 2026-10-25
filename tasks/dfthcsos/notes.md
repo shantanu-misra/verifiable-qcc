@@ -213,7 +213,7 @@ Probes of the constrained problem (B 400 points from the direct VarPro fit):
   47.2 **by construction** at E_gap 3.92-3.93, i.e. the floor structure is compatible with the gates; but starting
   from |w| of the unconstrained fit the error is 2.6 Ha and falls only to 1.23 Ha in 600 evaluations. The PSD-column
   decomposition needs its own initialisation (it is not a sign flip of the eigen-decomposition: cross terms).
-- Unregularised B 496 asymptote: 81 mHa after 3,000 iterations, ~0.3 mHa per 100: heading to ~70, not 15.
+- Unregularised B 496 asymptote: 74.5 mHa after 6,000 iterations (81 at 3,000; 0.16 mHa per 100 at the end): heading to ~70, not 15.
 
 Assessment (2026-10-25): the vector-count lever is real and the circuit side is ready (plain QROM at 574 Toffolis /
 120 qubits per circuit), but a from-scratch THC/SOS factorisation that clears error_2 <= 20 mHa with Lambda ~ 290 is

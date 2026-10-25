@@ -505,3 +505,47 @@ def lbfgs_joint_u(prob: THCProblem, u, w, W, *, opt_u=True, opt_w=True, opt_W=Tr
     log(f"  joint{tag} done ({res.nit} it, {state['calls']} calls, {res.message}): e2 {1e3*r['error_2']:.3f} mHa  "
         f"E_gap {r['E_gap']:.4f}  Lambda {r['Lambda']:.2f} (L2 {r['lambda2']:.2f})  lam_eff {r['lambda_eff']:.3f}")
     return v["u"], v["w"], v["W"], r
+
+
+# ---------------------------------------------------------------------------------------------
+# SOS-constrained THC: w = v*v (every column single-signed, X^c PSD) and W_c = -sum_b w_bc - t_c^2
+# (W_c <= -tr X^c), so Lambda_2 = 1/4 sum W_c^2 exactly; the loss keeps only error_2^2 + a_gap (E_gap - target)^2.
+
+
+def lbfgs_sos(prob: THCProblem, u, v, t, *, maxiter=300, tag="", log=log, opt_u=True):
+    from scipy.optimize import minimize
+
+    shapes = (u.shape, v.shape, t.shape)
+    n_u = u.size if opt_u else 0
+    x0 = np.concatenate([u.ravel() if opt_u else np.empty(0), v.ravel(), t.ravel()])
+    state = {"calls": 0, "t0": time.time()}
+
+    def unpack(x):
+        uu = x[:n_u].reshape(shapes[0]) if opt_u else u
+        vv = x[n_u:n_u + v.size].reshape(shapes[1])
+        tt = x[n_u + v.size:].reshape(shapes[2])
+        return uu, vv, tt
+
+    def fun(x):
+        uu, vv, tt = unpack(x)
+        ww = vv * vv
+        WW = -ww.sum(axis=0) - tt * tt
+        r = prob.forward_backward_u(uu, ww, 0.0, 0.0, True, W=WW)
+        state["calls"] += 1
+        dW = r["dW"]
+        dv = 2.0 * vv * (r["dw"] - dW[None, :])  # dW/dw_bc = -1
+        dt_ = -2.0 * tt * dW
+        g = np.concatenate([r["du"].ravel() if opt_u else np.empty(0), dv.ravel(), dt_.ravel()])
+        if state["calls"] % 50 == 1:
+            log(f"  sos{tag} call {state['calls']:5d}  e2 {1e3*r['error_2']:8.3f} mHa  E_gap {r['E_gap']:.4f}  "
+                f"Lambda {r['Lambda']:.2f} (L2 {r['lambda2']:.2f})  lam_eff {r['lambda_eff']:.3f}  ({time.time()-state['t0']:.0f}s)")
+        return r["loss"], g
+
+    res = minimize(fun, x0, jac=True, method="L-BFGS-B", options={"maxiter": maxiter, "maxcor": 30, "ftol": 1e-15, "gtol": 1e-13})
+    uu, vv, tt = unpack(res.x)
+    ww = vv * vv
+    WW = -ww.sum(axis=0) - tt * tt
+    r = prob.forward_backward_u(uu, ww, 0.0, 0.0, False, W=WW)
+    log(f"  sos{tag} done ({res.nit} it, {state['calls']} calls, {res.message}): e2 {1e3*r['error_2']:.3f} mHa  "
+        f"E_gap {r['E_gap']:.4f}  Lambda {r['Lambda']:.2f}  lam_eff {r['lambda_eff']:.3f}")
+    return uu, vv, tt, r
