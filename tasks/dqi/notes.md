@@ -431,3 +431,23 @@ Toffolis = +6 %) would recover ≈ 2.3 % of R: not worth it at T ≈ 1.6 M.
 | sweep inverse 78 → 66 (norm-based GF(64)² tower, public figure) | −12 × 4,095 ≈ −49 k (−3.1 %) | after the two above |
 | mask projection (−70 sweep positions) | ≈ −6 k (−0.4 %) | later |
 | exact weight-35 gap level | +100 k T for −2.3 % R | no |
+
+**Built (round 9a).** `mul42.py`: GF(4096) = GF(8)[y]/(g) with g the minimal polynomial of α over GF(8) = ⟨γ = α⁵⁸⁵⟩,
+GF(2)-basis γʲαⁱ; Toom-Cook at {0, 1, γ, γ², γ³, γ⁴, ∞}, each point product the 6-AND GF(8) Karatsuba; evaluation,
+interpolation (6×6 Vandermonde inverse plus the ∞ correction), reduction and both basis changes composed into 42 terms
+(xbits, ybits, out-mask) — verified on 2,000 random pairs and in the circuit (0/256 wrong, inputs undisturbed, no phase
+flips). `GFMul` now takes mask terms (Karatsuba 51 kept as `algorithm='karatsuba'`). Reciprocal n = 69: 25,368 Toffolis.
+Sweep: `A2[0] = None` makes q₀ implicit — the sums accumulate into the first even slot and the root test is acc == 1
+(X on bit 0 around the ladder); toy decoders exact, toy Q −6 (−12 at full scale).
+
+**Built (round 9b): 66-Toffoli tower inverse.** GF(64) products by a 15-AND GF(4)³ Toom-Cook algorithm
+(`mul42.build_terms6`, exhaustive check on all 4,096 pairs), and the GF(8) inverse as a quadratic map with the three
+ANDs x₀x₁, x₀x₂, x₁x₂ (search `build/search_inv8.py`), erased by X-measurement with CZ/Z fixups (0 Toffolis, no
+scaffold). Inverse = ab (15) + GF(64) inverse (6 + 3 + 12 = 21) + two GF(64) products (30) = 66; gated 69 (was 78).
+tower.py self-test: inverse+del 66, gated 69, compact 102, all exact, no phase flips. Expected −12 × 4,095 ≈ −49 k on the
+sweep plus ≈ 1.7 k on the extraction/conversion inverses.
+
+**v17 = `dqi_1457063322771_23f3768d.kmb` (42-Toffoli multiplier, implicit q₀): full PASS, score 1.4571e12 (16.77×),
+Q 915, T 1,392,254.13, 0 value / 18 phase failures (R 1.2500)** — `runs/dqi_1457063322771_23f3768d_full.json`.
+−12.6 % vs v16. 18 failures ≈ the model's 37 wrong shots × ½ (random phase), so v15/v16's 9 and 7 were the lucky end:
+the weight-35 gap class now costs ≈ 5 % in R.

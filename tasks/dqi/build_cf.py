@@ -400,12 +400,10 @@ class CFDecoder(BMDecoder):
             self.extract(words)
         with b.mark('cf_to_poly'):
             P, Q = self.convert(words)
-        one = b.alloc_qubits(self.deg); b.x(one[0])
-        self.A2 = [one] + Q + [None] * (self.slots - 1 - len(Q))
+        self.A2 = [None] + Q + [None] * (self.slots - 1 - len(Q))    # q_0 = 1 implicit (sweep tests acc == 1)
         self.W = P + [None] * (self.t - len(P))
         with b.mark('sweep'):
             self.sweep(E)
-        b.x(one[0]); b.free(one)
         with b.mark('cf_from_poly'):
             self.convert(words, reverse=True)
         with b.mark('cf_unextract'):
