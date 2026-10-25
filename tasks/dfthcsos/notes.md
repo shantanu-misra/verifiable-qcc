@@ -61,11 +61,30 @@ raises E_gap and lambda_eff (+27 % at brot 7). E_gap must stay > 3.914898: negma
 Lambda_2 = 295.6 of Lambda; the per-rho O(60) gauge (w -> wO, W -> O^T W leaves everything but Lambda_2 invariant)
 is already better in the baseline (eigen gauge 328, random 353), so no free Lambda there.
 
+The Givens tree is not a lever: the baseline's binomial tree already has the smallest noise amplification
+(mean sum_t r_t^2 = 6.3, where r_t is the parent amplitude rotated by edge t; k-ary heaps 7.0-7.4, path/star 37).
+
 ## 4. Quantisation-aware refit (`refit.py`)
 
-STE Adam on latent angles + weights with the exact verifier objective on the 2,926-pair symmetric matricisation
-(0.9 s per step natively), then exact coordinate descent on the integer words (best of 150 single-word moves per
-vector per sweep, rank-2 residual update), then the 76 one-body rows rounded and polished on error_1. Results: §5.
+Exact verifier objective on the 2,926-pair symmetric matricisation (H = M M^T with M = s(X^(rho c)), 0.45 s per
+loss+gradient natively; gradients checked against finite differences). Findings, in order:
+
+- Continuous L-BFGS on (angles, weights) from the baseline: 16.133 -> 15.69 mHa after 400 iterations. The baseline
+  factorisation has essentially no slack; the intrinsic error stays ~15.7 mHa, so quantisation may add only ~12 mHa
+  in quadrature.
+- Weight-only refit against frozen brot-10 words: 40.0 -> 30.4 mHa (and lambda_eff 49.6 -> 50.5: negmass and
+  Lambda drift up). Not enough on its own.
+- STE Adam (lr 2e-4 on angles) diverged (40 -> 62 mHa): the quantised forward pass makes normalised steps useless.
+- Exact coordinate descent on the words (best of 150 +-1 single-word moves per vector, rank-2 residual update,
+  ~2 min per sweep): 62 -> 39 -> 31 mHa in two sweeps; the strongest single tool.
+- Progressive quantisation (freeze 1/16 of the rows at their rounded words, re-optimise the rest + weights with
+  30 L-BFGS iterations, repeat): the error creeps from 16.2 to 22.1 mHa over 16 batches at brot 10 (it holds the
+  frozen rows' noise in the free rows); polish then gives 20.8 after one sweep.
+- One-body rows: plain rounding of the h1' eigenvectors gives 14 / 52 / 117 mHa at brot 10 / 8 / 7. Encoding them
+  in decreasing |lambda| with error feedback (row b targets e_b - sum_a (lambda_a/lambda_b) d_a[b] e_a, so only
+  lambda_min(a, b) times the rounding error survives per pair) gives 5.0 / 24 / 50 mHa, and coordinate descent with
+  continuous "retarget" moves (v' = normalise(v - s/lambda P_perp E v), rounded) 4.2 / 12.6 / 27.8 mHa after 8
+  sweeps. error_1 is therefore not the binding gate at brot 8; at brot 7 it is still 1.4x over.
 
 ## 5. Results (verified, `runs/dfthcsos_*.json`)
 
@@ -73,5 +92,13 @@ vector per sweep, rank-2 residual update), then the 76 one-body rows rounded and
 |---|---|---|---|---|---|---|---|---|---|
 | `dfthcsos_3178937006_028667e2` | 12 | 4 | baseline (plain rounding) | 49.301369 | 94,545 | 682 | 3,178,937,005.85 | 1.0556 | `dfthcsos_3178937006_028667e2_full.json` |
 
-error_1 3.185 mHa, error_2 18.640 mHa, 19 circuits of 119 qubits and 2,126 Toffolis (80,788 over both passes),
+| `dfthcsos_2632125690_c68ca4a8` | 10 | 5 | refit v1 (prog 16 batches + 2 polish sweeps + w refit) | 49.977752 | 76,997 | 684 | 2,632,125,689.76 | **1.2749** | `dfthcsos_2632125690_c68ca4a8_full.json` |
+
+Row 1: error_1 3.185 mHa, error_2 18.640 mHa, 19 circuits of 119 qubits and 2,126 Toffolis (80,788 over both passes),
 0 failures on 254,464 shots. Only the circuit changed; this is the pipeline check.
+Row 2: error_1 10.706 mHa, error_2 **19.982 mHa** (0.02 mHa under the gate; the metric is a deterministic function of the
+files, so this is not a seed risk, but the margin is thin), E_gap 4.072132, Lambda 308.7275; 15 circuits of 123 qubits and
+2,128 Toffolis (63,840 both passes); 0 failures. lambda_eff is 1.4 % above the baseline's because the refit lets negmass and
+Lambda drift up; T is 17 % lower (fewer, cheaper lookups), Q 6 % lower (50 instead of 96 persistent word qubits).
+The public brot-10 design reports 2.345e9 with lambda_eff 47.5 from its own factorisation; at our lambda_eff the same
+T and Q would give 2.65e9, so the circuit side is at the public level and the remaining gap is the factorisation.
