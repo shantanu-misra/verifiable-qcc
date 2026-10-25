@@ -69,3 +69,37 @@ refit with the starter kit's JAX trainer is the untested 2× he points at.
 - dqi is the lever: 10× is already public with Q untouched; Q² means a 1,818 → 1,200 Q cut alone is 2.3×.
 - invsqrt: adopting ideas 1–4 in our own generator should take us from 3,074/147 to the public ~1,470/93 band
   (×1.44 on the final score); passing it needs a new idea, not tuning.
+
+## Update 2026-10-25: the frontier moved (second survey)
+
+Board: 905 teams, median 7.57, #100 11.29, #50 11.61, #10 16.48, #1 20.48. Participants' self-reported per-task
+ratios (forum thread 752550): #12 → 20.6× / 22.6× / 7.1×; #49 → 16.2× / 26.8× / 3.6×; #52 → 14.8× / 25.4× / 4.1×
+(invsqrt / dqi / dfthcsos). The best public portfolio scores 11.38, so **the top-100 threshold ≈ the public circuits
+assembled**; everyone above it has private improvements. Self-reported public bests (not reproduced by us):
+
+| task | public best | ratio | ours (verified) | ours | gap |
+|---|---|---|---|---|---|
+| invsqrt | Q 82, 1,365 Toffolis + 44 rotations, C 1,684, cost 138,095 (binary); full-source variant Q 92, 1,304, cost 148,978 | 15.0× (13.9×) | 165,584 (Q 93, 1,465) | 12.5× | 1.2× |
+| dqi | **Q 881**, ~1.12 M mean Toffolis, 0 failures, cost 1.03e12 (siblings 898 q / 1.08 M; 932 q / 1.42 M) | 23.7× | 3.32e12 (Q 1,856, T 810k) | 7.35× | 3.2× |
+| dfthcsos | Q 833, T 20,286, λ_eff 47.9, cost 8.09e8 (also Q 656 / T 29,360 / 9.2e8) | 4.15× | 2.58e9 (Q 684, T 76,997, λ_eff 49.0) | 1.30× | 3.2× |
+
+What moved each task (one line each; details are in the public notebooks, which embed Apache-2.0-labelled source):
+- dqi: an **in-place continued-fraction ("J-fraction") key-equation decoder that uses the syndrome registers as
+  workspace** (881 = 840 + 41 pointer/history qubits), with paired extraction sharing one GF(4096) reciprocal across
+  two levels. Toffolis roughly double versus the 583k BM circuit, but Q² falls 4.3×. It is approximate for rare
+  high-order gaps (0 failures seen at 102,400 shots). Our §6–§8b analysis proved Q ≥ 1,723 only for syndrome-live
+  decoders; this is the "consume the syndromes" design we had classified as open.
+- dfthcsos: cost is close to proportional to the number of loaded vectors N + R·B; the frontier loads **572 vectors
+  (single-group THC R1/B496/C384)** versus ~3,976 in the baseline-shaped family, with 11-bit ANF (XOR-of-monomials)
+  lookups at 128 qubits per circuit. Factorisations are trained offline (GPU recipes; one is a public dataset) and
+  sit ~2 % above the λ_eff floor 46.79, with E2 at 19.999 mHa and E_gap 2e-5 above its floor.
+- invsqrt: narrow outer rows via 2-bit carry counters, a parity refit removing a derivative wire, Cuccaro prefix on
+  full-width rows, shift stages fused into the phasing, LP-calibrated rotation angles, and an **exact-domain pass**
+  that deletes Toffolis whose controls are provably constant over all 3,133,452 legal inputs (generic: applies to any
+  circuit with an enumerable input domain).
+- Also: a "classical mask projection" lets the Forney sweep skip 70 positions (−0.4 % T); the Kaggle scoring image
+  is Python 3.13 / GCC 13.3 / Ubuntu 24.04 (why the shipped `kickmix.so` needs GLIBCXX_3.4.32); our verifier files
+  match the SHA-256 pins a public notebook publishes; public portfolios scored exactly their local projections.
+
+Portfolio arithmetic: matching all three public bests gives (15.0 × 23.7 × 4.15)^(1/3) ≈ 11.4, i.e. ×2.3 on our 4.91.
+Per 10 % cost cut in one resource the score moves +3.6 %, except dqi qubits (+7.3 %, squared).
