@@ -1,0 +1,15 @@
+{
+  "id": "shantanumisra/dfthcsos-train",
+  "title": "dfthcsos-train",
+  "code_file": "train_kaggle.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_tpu": false,
+  "enable_internet": false,
+  "dataset_sources": ["sohier/verifiable-circuit-compilation-starter-kit"],
+  "competition_sources": ["google-verifiable-quantum-circuit-compilation"],
+  "kernel_sources": [],
+  "model_sources": []
+}

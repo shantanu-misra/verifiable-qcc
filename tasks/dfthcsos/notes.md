@@ -289,3 +289,15 @@ optimal weights solve sum_r' K[r,r'] G_r' K[r',r] + ridge G_r = Us_r T Us_r^T (K
 by CG at ~0.02 s per application; the point gradient is then the partial gradient with G fixed (Golub-Pereyra). The
 weights, the badly conditioned "fast" variables of the joint fit, are exact at every evaluation; only the points
 remain for L-BFGS. The rank-C PSD factor of G gives w at the end.
+
+## 9. GPU training (2026-10-25, top session: get the training off the CPU)
+
+`train_mps.py`: the grouped factorisation in PyTorch (float32 on the device, verifier metrics in float64 on the CPU every
+N steps), Adam with cosine lr decay, loss error_2^2 + a_gap (E_gap - target)^2 + beta D(w) + mu Lambda_2, progressive
+group dropping with per-stage checkpoints. Speed at (65, 60, 45): **MPS 24.1 Adam steps/s (41 ms/step)**, torch CPU
+7.4 steps/s, numpy float64 L-BFGS ~2.2 evaluations/s. The M4 Pro GPU does the 2926 x 2925 x 2926 fp32 matmul in 36 ms
+(1.4 TFLOPS), the same as the CPU's AMX path; the gain comes from the whole backward pass staying on the device.
+100k steps per stage = 69 min. `kaggle/build_kernel.py` concatenates the modules into the self-contained kernel
+`kaggle/train_kaggle.py` (metadata: private, GPU, competition data + starter kit attached, checkpoints to
+/kaggle/working/stage_R<R>.npz); block variable projection was parked (its CG does not converge on the dyad Gram,
+186 s per evaluation, and the unconstrained G is not PSD).
