@@ -247,3 +247,29 @@ because syndromes are shared between matrix entries. No candidate clears the rul
 
 Verdict: for BM/EEA decoders the syndromes stay live and Q ≥ 1,723 + scratch. A genuinely smaller Q needs a decoder
 whose state is the error list rather than (S, σ, B) — not a variant of BM — and we have no such algorithm.
+
+## 8. Toffolis at fixed Q (round 5, 2026-10-25): candidates against Q′²T′ < 2.82e12
+
+v13 per BM step (forward): discrepancy 1,016 (≈ 20 products), update 1,064, erase_nu 616 (inverse 125, 6 products
+306, B-slot copies 72, ν selection 36, three zero tests 66, flags ≈ 10), cswap 262, division 127 (inverse 79 + product
+51), L/flag bookkeeping ≈ 40. Reverse: the same without the discrepancy. Sweep per position 91: zero test 12 (11 + 1),
+gated tower inverse 79 (GF(64) product 17, GF(8) tower 27 incl. 3-Toffoli gate, two GF(64) products 34).
+
+| candidate | ΔT (both passes) | ΔQ | verdict |
+|---|---|---|---|
+| division-free step by storing B pre-scaled (B/b, so ν = d and b ≡ 1) | −130/step but the lc re-scaling B ← C_old/d costs L products (+1,064/step) | 0 | reject |
+| two row operations instead of cswap + division (C ⊕= d·X, then X ⊕= lc·d⁻¹·C: b stays 1 forever, no swap) | +1,064 −262 −51 −125 = +626/step | −12 | reject |
+| inversionless (riBM) update C ← b·C ⊕ d·x^m B | in-place scaling of ≈ L slots: +2 products per slot | 0 | reject |
+| cache 1/B[0] (and 1/C[0]) to drop the recursion's inverse | −125/step but needs 1/ν per lc (+79) and 2 extra registers | +24 | reject (Q² +2.6 % > T gain) |
+| only j ≤ 1 branches, ν₂ parked in one junk register | −200/step, +12 qubits, ≈ 10 shots with two j=2 events fail | +12 | reject (R +3 %) |
+| tighter static bounds (+1/+2 instead of +2/+3) | −14k | 0 | reject: ≈ 1e-4 of shots (two mid-run zeros) would fail, R +3 % |
+| Karatsuba short product for ω | −38k | needs the 35 outputs in separate registers: +420 | reject |
+| **2-bit saturating shift counter m instead of zero tests of A1[0..2]** (f0 = lc, f1 = ¬lc∧m=1, f2 = ¬lc∧m=2; lc erased by m = 1; no wrap flag) | ≈ −90/step → −12.6k | +2 | **accept** |
+| **GF(8) inverse as x²·x⁴ (one 6-Toffoli product of linear images) instead of kickmix's 7** | −1 per inverse: −4.4k | 0 | **accept** (marginal) |
+| cheaper 12-bit zero test than 11 + 1 | none known | — | — |
+| sharing products across sweep positions | none: each position's σ′ is an unrelated field element | — | — |
+
+Where the public BM is cheaper (≈ 120k over both passes): their step has no quotient erasure and roughly half our
+swap; we have not found a formulation without the ν erasure for no-length-change steps (the junk is intrinsic:
+after C ⊕= ν x^m B the old C is gone and ν is only recoverable from (C, B) by the power-series recursion).
+Expected after the two accepted items: T ≈ 800k at Q 1,858 → Q²T ≈ 2.76e12 (−2 %).
