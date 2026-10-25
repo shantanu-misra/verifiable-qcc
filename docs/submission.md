@@ -45,6 +45,7 @@ layout. If a generator ever allocates ids sparsely, check the id cap, not just `
 | 2026-10-24 | (see sidecar 225940Z) | `invsqrt_165584_2d7c9f6e.kmx` (165,583.96) | `dqi_3355430905041_6ea37ae1.kmb` (3.3554e12, 0 failures) | baseline | 4.5037 | **4.50372** | n/a |
 | 2026-10-25 | 0a41aa6a… | `invsqrt_165584_2d7c9f6e.kmx` (165,583.96) | `dqi_3355430905041_6ea37ae1.kmb` (3.3554e12, 0 failures) | `dfthcsos_2581833307_5ff495ce/` (2.5818e9, own banked QROM + brot-10 refit) | 4.9149 | **4.91494** | ≈633 / 905 |
 | 2026-10-25 | 66d120a9… | `invsqrt_165584_2d7c9f6e.kmx` (165,583.96) | `dqi_3324250406015_ee5f2540.kmb` (v14, 3.3243e12, 0 failures) | `dfthcsos_2581833307_5ff495ce/` (2.5818e9) | 4.9303 | **4.93026** | see below |
+| 2026-10-25 | 923e9da1… | `invsqrt_158560_c0910790.kmx` (158,559.55) | `dqi_1018990736589_a2fc298a.kmb` (v20, 1.0190e12, 11 phase failures locally) | `dfthcsos_2581833307_5ff495ce/` (2.5818e9) | 7.4186 | (pending upload) | |
 
 The second upload scored 4.35605 against a local 4.3494: the difference is exactly the dqi repetition factor going
 from R(1 failure) = 1.1967 to R(0 failures) = 1.1913, i.e. the salted shot stream drew none of the rare j = 3 inputs

@@ -1,0 +1,9 @@
+created_utc: 2026-10-25T20:46:24Z
+zip: submissions/submission.zip  sha256: 923e9da146e4f897e6473cacd12d78540320903eed2a7f68df349b61286eba09
+invsqrt: circuits/invsqrt/invsqrt_158560_c0910790.kmx  sha256: 9f037a3f78cd5c38b60c2a8101aa6701d1a42130577cbb874f6be6440b2d51d6
+dqi:     circuits/dqi/dqi_1018990736589_a2fc298a.kmb  sha256: a2fc298a2331da79d94ddae418b92a2c956021da1c8c19c0dff0dc92fe12b6a2
+dfthcsos: circuits/dfthcsos/dfthcsos_2581833307_5ff495ce  sha256(angle_k_*,submission.npz): 3eeeacebbb72ffa3086540e8478b423c873d6dfae84841da22a68cc13b1cd087
+kaggle_public_score: TODO fill in after upload
+local_expected_score: 7.4186  (invsqrt 13.098x, dqi 24439463583672.93/1018990736589.166 = 23.984x, dfthcsos 1.300x)
+verifier_runs: runs/invsqrt_158560_c0910790_full.json (0 failures), runs/dqi_1018990736589_a2fc298a_full.json (v20: 11 phase failures, R 1.2319), runs/dfthcsos_2581833307_5ff495ce_full.json
+metric_only_checks: zip layout ok (invsqrt.kmx, dqi.kmb, dfthcsos/angle_k_0..14 + submission.npz), dqi part sha256 == verifier circuit_sha256 True, invsqrt part byte-identical to circuits/invsqrt/invsqrt_158560_c0910790.kmx True — checked 2026-10-25
