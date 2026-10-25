@@ -372,15 +372,22 @@ class CFDecoder(BMDecoder):
 
     # ---- paired extraction (notes §10, round 9c) -------------------------------------------------------
     def inv_open(self, x):
-        """Regularised inverse: (inv, sc, z) with z = [x == 0]; x is forced to 1 while z is set."""
+        """Regularised inverse: (inv, sc, z) with z = [x == 0]; x is forced to 1 while z is set. With the tower the
+        scaffold is erased at once (compact form, ~46 Toffolis more at deletion) so the scaling phase stays under the
+        sweep's qubit peak."""
         b = self.b
         z = b.alloc_qubits(1)[0]; self.is_zero(x, z); b.cx(z, x[0])
+        if self.tower is not None:
+            return self.tower.init_inverse_compact(b, x), None, z
         inv, sc = self.inverse_init(x)
         return inv, sc, z
 
     def inv_close(self, x, inv, sc, z):
         b = self.b
-        self.inverse_del(x, inv, sc)
+        if self.tower is not None:
+            self.tower.del_inverse_compact(b, x, inv); b.free(inv)
+        else:
+            self.inverse_del(x, inv, sc)
         b.cx(z, x[0]); self.is_zero(x, z); b.free(z)
 
     def scale1(self, w, factor, undo):
@@ -399,6 +406,22 @@ class CFDecoder(BMDecoder):
             b.del_gf2_mul(x, y, target=tmp, field=self.gf); b.free(tmp)
         else:
             self.xor_prod(x, y, target)
+
+    def zero_or(self, x, y):
+        """z = [x == 0 or y == 0] (two zero tests, 1 Toffoli)."""
+        b = self.b
+        zx, zy, z = b.alloc_qubits(3)
+        self.is_zero(x, zx); self.is_zero(y, zy)
+        b.x(zx); b.x(zy); b.ccx(zx, zy, z); b.x(z); b.x(zx); b.x(zy)
+        self.is_zero(y, zy); self.is_zero(x, zx); b.free(zx); b.free(zy)
+        return z
+
+    def zero_or_close(self, x, y, z):
+        b = self.b
+        zx, zy = b.alloc_qubits(2)
+        self.is_zero(x, zx); self.is_zero(y, zy)
+        b.x(zx); b.x(zy); b.x(z); b.ccx(zx, zy, z); b.x(zx); b.x(zy)
+        self.is_zero(y, zy); self.is_zero(x, zx); b.free(zx); b.free(zy); b.free(z)
 
     def a1_gate(self, zy, F, L):
         """Control for the '+a1' terms: c' != 0, and (L == 4) W[3] is a real cell."""
@@ -474,30 +497,32 @@ class CFDecoder(BMDecoder):
                 self.scale1(W[3], invy, Y)                                # w1 / (c c')
                 for m in range(4, L):
                     self.scale1(W[m], invy, Y)                            # w_m / w0
-                self.inverse_del(Y, invy, scy)
+                self.inv_close(Y, invy, scy, zy)
+                b.del_gf2_mul(W[0], W[2], target=Y, field=self.gf); b.free(Y)
+                zy = self.zero_or(W[0], W[2])                             # [cc' == 0] without holding Y
                 ga = self.a1_gate(zy, F, L)
                 self.gated_xor(ga, W[1], W[3])                            # a1' = w1/(cc') + a1   (only if c' != 0 and W[3] real)
                 self.gated_xor(ga, W[1], W[3])                            # window head w1/w0 = a1' + a1
                 self.reciprocal(W[3:], gate=F)                            # w0 / w
                 self.gated_xor(ga, W[1], W[3])                            # back to a1'
                 self.a1_gate_close(ga, zy, F, L)
-                b.cx(zy, Y[0]); self.is_zero(Y, zy); b.free(zy)
-                b.del_gf2_mul(W[0], W[2], target=Y, field=self.gf); b.free(Y)
+                self.zero_or_close(W[0], W[2], zy)
                 step5(F, False)
                 if self.gaps:
                     self.flag_release(F)
             else:
                 F = self.flag_acquire() if self.gaps else None
                 step5(F, True)
-                Y = b.alloc_qubits(self.deg); self.xor_prod(W[0], W[2], Y)
-                zy = b.alloc_qubits(1)[0]; self.is_zero(Y, zy); b.cx(zy, Y[0])
+                zy = self.zero_or(W[0], W[2])
                 ga = self.a1_gate(zy, F, L)
                 self.gated_xor(ga, W[1], W[3])
                 self.reciprocal(W[3:], reverse=True, gate=F)
                 self.gated_xor(ga, W[1], W[3])
                 self.gated_xor(ga, W[1], W[3])
                 self.a1_gate_close(ga, zy, F, L)
-                invy, scy = self.inverse_init(Y)
+                self.zero_or_close(W[0], W[2], zy)
+                Y = b.alloc_qubits(self.deg); self.xor_prod(W[0], W[2], Y)
+                invy, scy, zy = self.inv_open(Y)
                 for m in range(L - 1, 3, -1):
                     self.scale1(W[m], Y, invy)
                 self.scale1(W[3], Y, invy)
