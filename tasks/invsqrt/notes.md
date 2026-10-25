@@ -533,3 +533,71 @@ Q 89–90 at ≈ 1,440 Toffolis (Cuccaro 6), roughly 157k — within 1 % of the 
 circuit must hold fewer bits at lookup time (a narrower L, no separate residual/coarse pair, or a different error
 split); our fit says those widths fail the 2^-24 tolerance in our pipeline, so matching it needs a different
 arithmetic, not more packing. Stopping here as agreed; `invsqrt_158560_c0910790` stays the submission circuit.
+
+## 14. Research round beyond the public design (2026-10-25): three ideas costed, none clears 150k
+
+Baseline for all numbers: `invsqrt_158560_c0910790` — Q 92, 1,408.0 executed Toffolis (static 1,419), 44 rotations
+at 28.65 T = 315.2 Toffoli-eq, C 1,723.5, Q·C 158,560. Measured stage split (static): normalise 104, lookup 254,
+high-word phase 63, erase 25, inner rows 174, merge 10, outer rows 534 (7 narrow rows × 13 + fold 8 + 7 wide rows
+× 24 with Cuccaro 4, both directions), low-word phase 130, unlookup 25, un-normalise 100. Build threshold agreed
+for this round: modelled Q·C ≤ ≈ 150k. Nothing below reaches it, so nothing was built.
+
+### Idea 1 — radix-4 signed digits {±1, ±3}: a wash on Toffolis, a loss on qubits
+
+Pairs of our ±1 digits are exactly radix-4 digits d = 2·sig_{2j+1} + sig_{2j} ∈ {±3, ±1}, so a row adds
+±V or ±3V with V = operand ≫ sh(2j); |d| = 3 iff x[2j+1] = x[2j] (one CNOT), sign = x[2j+1]. The selected operand
+must be materialised: the cheapest way is a temp-AND select into a fresh register, sel_i = V_i ⊕ eq·(V_i ⊕ 3V_i)
+(1 Toffoli per operand bit, erased by `del_and` for free), so a radix-4 row costs n_op + (n_tgt − 1) against
+2(n_tgt − 1) for the two radix-2 rows it replaces.
+
+| rows | radix-2 (now) | radix-4 | Δ per direction |
+|---|---|---|---|
+| outer narrow, digits (0,1) (2,3) (4,5) + digit 6 alone | 7 × 13 = 91 | 3 × 13 + (5 + 7 + 9) selects + 13 = 73 | −18 |
+| outer wide, digits (8,9) (10,11) (12,13) + digit 7 alone | 7 × 20 = 140 | 3 × 20 + (13 + 15 + 17) + 20 = 125 | −15 |
+| 3R for the outer rows (R + 2R, 19-bit adder) | — | +18 | +18 |
+| inner, digits (13,12) (11,10) (9,8) (7,6) with 3c2 looked up | 8 × 11 = 88 | 4 × (8 + 11) = 76 | −12 |
+
+Net ≈ −27 Toffolis per direction (−54, −3.8 %) **but** the outer rows need a 19-qubit 3R register plus up to 17
+select qubits at the peak (Q 92 → ≈ 110–128), and the inner rows need 3c2 in the QROM (+8–9 bits live at the
+lookup peak: 90 → 99). Modelled: inner-only variant Q 101 × C 1,699 = **172k**; full variant ≥ 110 × 1,670 =
+**184k**. A CSWAP select instead of temp-AND costs 2 n_op (select + unselect) and is worse than two adders.
+Verdict: wash on gates, loss on Q — stop.
+
+### Idea 2 — table-synthesised phase for the low bits: no gain available
+
+The phase is linear in the bits, Σ_j 2^{e_j} b_j. A diagonal that is linear in k bits with distinct dyadic weights is
+a product of k single-qubit Z_POWs and cannot be synthesised with fewer non-Clifford rotations (its 2^k phases are all
+distinct dyadics); the per-rotation price is set jointly by eps, which is already shared. The only levers are
+(a) dropping low rotations: the LP of §12 shows one dropped rotation leaves worst err/tol 1.016 after re-optimising
+the other 43 — FAIL; (b) merging the 11 positions where the high and low words carry the same weight (e ∈ [−18, −8]):
+θ(h + l) needs the sum bits, i.e. an 11-bit adder of H into L — the "join", which keeps H's 8 qubits live through
+the rows: −11 rotations (−79 Toffoli-eq) + 10 Toffolis, Q 92 → 100: 100 × 1,654 = **165k**. Verdict: disproved.
+
+### Idea 3 — k / degree re-sweep with the exact pass and windows
+
+The exact pass changes nothing here: it found 5 rewrites on this design and the lookup's 2^k − 2 unary iteration has
+no constant controls (all 256 addresses occur).
+
+| variant | lookups (init + 2 unlookups) | rows | widths | Q | Q·C est. |
+|---|---|---|---|---|---|
+| k = 8, degree 2 (now) | 254 + 25 + 25 | 534 + 174 | F2 9 / F1 19 / FY 28 | 92 | 158.6k |
+| k = 9, degree 2 | 510 + 41 + 41 (+288) | 13 digits: −31 per direction; even −1 bit on every width (float error 2^-30.7) saves only ≈ −44 | | ≈ 91 | ≈ **173k** |
+| k = 7, degree 2 | 126 + 18 + 18 | — | float quadratic error 2^-24.7 before truncation: **fails tolerance** | | — |
+| k = 6, degree 3 | 62 + 10 + 10 (−222) | 16 digits: outer +40/direction; third Horner step ≈ 10 rows × 11 = +110/direction | widths −1…−2 bits at best (float 2^-29) | +12…18 (r1 and c3 live through the outer rows) | ≈ 104 × 1,760 = **183k** |
+
+Verdict: k = 8 / degree 2 remains the optimum; the §6 conclusion stands with the new row costs.
+
+### Own candidates considered
+
+* **1-guard offset window** (public "g1" scheme, re-derived: flip L[W] and copy it into one guard so the 14-bit window
+  starts centred; fold = L[13:] += t'' − g', then L[W] := ¬t''): −1 qubit, +12 Toffolis → Q 91 × 1,735 = 157.9k
+  (−0.4 %); with Cuccaro 5 → Q 90 × 1,749 = 157.4k. Below threshold, not built.
+* **Own QROM with 7 ancillas + constant-1 MSB for H**: lookup peak 90 → 88, but our measurement-based unlookup
+  costs ≈ 42 Toffolis vs kickmix's 25 (+34 for two) → 88 × 1,799 = 158.3k. Not built.
+* **Merged final unlookup** (defer H's measurement fix-up): removes the erase peak only; the lookup peak (90) stays.
+* **Conditional rotations on the shifter extension** (skip the 10 ext Z_POWs when s = 0): impossible — s cannot be
+  read into a classical bit (kickmix has no Z-basis measurement, by design).
+
+**Where the leaders' ≈ 101k must come from**: at Q 82 that is C ≈ 1,230, i.e. ≈ 900 Toffolis + 315 rotation-eq;
+our rows alone are 708. That is not a packing problem but a different arithmetic (fewer or narrower rows, or a
+cheaper way to get 36 phase bits than 44 rotations). Round closed with no build; `invsqrt_158560_c0910790` stands.
