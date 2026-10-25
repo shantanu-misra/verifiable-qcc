@@ -49,10 +49,19 @@ FOOTER = '''
 
 if __name__ == "__main__":
     if ON_KAGGLE and len(sys.argv) == 1:
-        # Kaggle chain: the public schedule from the baseline, seed 1 (the Mac runs 60,55,48,... with seed 0)
-        sys.argv += ["--device", "cuda", "--out-prefix", "/kaggle/working/stage_", "--init", os.environ.get("VQCC_INIT", "baseline"),
-                     "--schedule", os.environ.get("VQCC_SCHEDULE", "55,48,42,36,32,28,26"),
-                     "--steps", os.environ.get("VQCC_STEPS", "100000"), "--eval-every", "2000", "--seed", "1"]
+        # Kaggle chain: the public schedule from the baseline, seed 1 (the Mac runs 60,55,48,... with seed 0).
+        # A P100/V100/A100 has fast float64: run L-BFGS in float64 (20k evaluations per stage); a T4 does not:
+        # float32 Adam, 100k steps per stage.
+        import torch as _t
+        name = _t.cuda.get_device_name(0) if _t.cuda.is_available() else "cpu"
+        fast64 = any(k in name for k in ("P100", "V100", "A100", "H100"))
+        print("GPU:", name, "-> float64 L-BFGS" if fast64 else "-> float32 Adam")
+        opt_args = (["--dtype", "float64", "--optim", "lbfgs", "--steps", os.environ.get("VQCC_STEPS", "20000"), "--eval-every", "200"]
+                    if fast64 else ["--dtype", "float32", "--optim", "adam", "--steps", os.environ.get("VQCC_STEPS", "100000"),
+                                    "--eval-every", "2000", "--lr", "3e-4", "--lr-end", "3e-6"])
+        sys.argv += ["--device", "cuda" if _t.cuda.is_available() else "cpu", "--out-prefix", "/kaggle/working/stage_",
+                     "--init", os.environ.get("VQCC_INIT", "baseline"),
+                     "--schedule", os.environ.get("VQCC_SCHEDULE", "55,48,42,36,32,28,26"), "--seed", "1"] + opt_args
     main()
 '''
 

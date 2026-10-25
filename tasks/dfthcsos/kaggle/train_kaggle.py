@@ -1935,10 +1935,11 @@ log = rf.log
 
 
 class Trainer:
-    def __init__(self, ref, base, u, w, W, device: str, a_gap: float, egap_target: float, beta: float, mu: float):
+    def __init__(self, ref, base, u, w, W, device: str, a_gap: float, egap_target: float, beta: float, mu: float,
+                 dtype: str = "float32"):
         self.ref, self.base = ref, base
         self.dev = torch.device(device)
-        self.dtype = torch.float32
+        self.dtype = torch.float64 if dtype == "float64" else torch.float32  # MPS is float32 only
         sym = rf.Sym()
         self.P = torch.tensor(sym.P, device=self.dev)
         self.Q = torch.tensor(sym.Q, device=self.dev)
@@ -2092,7 +2093,9 @@ def main() -> None:
     ap.add_argument("--beta", type=float, default=0.0, help="weight of the semidefiniteness penalty D(w)")
     ap.add_argument("--mu", type=float, default=0.0)
     ap.add_argument("--eval-every", type=int, default=2000)
-    ap.add_argument("--optim", choices=("adam", "lbfgs"), default="lbfgs")
+    ap.add_argument("--optim", choices=("adam", "lbfgs"), default="adam",
+                    help="adam tolerates the rough float32 loss; lbfgs needs float64 (CUDA/CPU) or it stalls at ~45 mHa")
+    ap.add_argument("--dtype", choices=("float32", "float64"), default="float32")
     ap.add_argument("--lbfgs-chunk", type=int, default=100, help="lbfgs: iterations per step() call (evaluation between chunks)")
     ap.add_argument("--bench", type=int, default=0, help="time this many steps and exit")
     ap.add_argument("--out-prefix", default="build/mps_")
@@ -2106,7 +2109,7 @@ def main() -> None:
     u, w, W = pr.load_state(args.init, base)
     if args.C and args.C < w.shape[2]:
         w, W = pr.prune_columns(w, W, args.C)
-    tr = Trainer(ref, base, u, w, W, args.device, args.a_gap, args.egap_target, args.beta, args.mu)
+    tr = Trainer(ref, base, u, w, W, args.device, args.a_gap, args.egap_target, args.beta, args.mu, dtype=args.dtype)
     m = tr.evaluate64()
     log(f"init {args.init} {w.shape} on {args.device}: e2 {1e3*m['error_2']:.3f} mHa  E_gap {m['E_gap']:.4f}  Lambda {m['Lambda']:.2f}")
     if args.bench:
@@ -2145,8 +2148,17 @@ def main() -> None:
 
 if __name__ == "__main__":
     if ON_KAGGLE and len(sys.argv) == 1:
-        # Kaggle chain: the public schedule from the baseline, seed 1 (the Mac runs 60,55,48,... with seed 0)
-        sys.argv += ["--device", "cuda", "--out-prefix", "/kaggle/working/stage_", "--init", os.environ.get("VQCC_INIT", "baseline"),
-                     "--schedule", os.environ.get("VQCC_SCHEDULE", "55,48,42,36,32,28,26"),
-                     "--steps", os.environ.get("VQCC_STEPS", "100000"), "--eval-every", "2000", "--seed", "1"]
+        # Kaggle chain: the public schedule from the baseline, seed 1 (the Mac runs 60,55,48,... with seed 0).
+        # A P100/V100/A100 has fast float64: run L-BFGS in float64 (20k evaluations per stage); a T4 does not:
+        # float32 Adam, 100k steps per stage.
+        import torch as _t
+        name = _t.cuda.get_device_name(0) if _t.cuda.is_available() else "cpu"
+        fast64 = any(k in name for k in ("P100", "V100", "A100", "H100"))
+        print("GPU:", name, "-> float64 L-BFGS" if fast64 else "-> float32 Adam")
+        opt_args = (["--dtype", "float64", "--optim", "lbfgs", "--steps", os.environ.get("VQCC_STEPS", "20000"), "--eval-every", "200"]
+                    if fast64 else ["--dtype", "float32", "--optim", "adam", "--steps", os.environ.get("VQCC_STEPS", "100000"),
+                                    "--eval-every", "2000", "--lr", "3e-4", "--lr-end", "3e-6"])
+        sys.argv += ["--device", "cuda" if _t.cuda.is_available() else "cpu", "--out-prefix", "/kaggle/working/stage_",
+                     "--init", os.environ.get("VQCC_INIT", "baseline"),
+                     "--schedule", os.environ.get("VQCC_SCHEDULE", "55,48,42,36,32,28,26"), "--seed", "1"] + opt_args
     main()

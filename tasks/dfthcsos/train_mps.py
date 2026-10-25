@@ -34,10 +34,11 @@ log = rf.log
 
 
 class Trainer:
-    def __init__(self, ref, base, u, w, W, device: str, a_gap: float, egap_target: float, beta: float, mu: float):
+    def __init__(self, ref, base, u, w, W, device: str, a_gap: float, egap_target: float, beta: float, mu: float,
+                 dtype: str = "float32"):
         self.ref, self.base = ref, base
         self.dev = torch.device(device)
-        self.dtype = torch.float32
+        self.dtype = torch.float64 if dtype == "float64" else torch.float32  # MPS is float32 only
         sym = rf.Sym()
         self.P = torch.tensor(sym.P, device=self.dev)
         self.Q = torch.tensor(sym.Q, device=self.dev)
@@ -191,7 +192,9 @@ def main() -> None:
     ap.add_argument("--beta", type=float, default=0.0, help="weight of the semidefiniteness penalty D(w)")
     ap.add_argument("--mu", type=float, default=0.0)
     ap.add_argument("--eval-every", type=int, default=2000)
-    ap.add_argument("--optim", choices=("adam", "lbfgs"), default="lbfgs")
+    ap.add_argument("--optim", choices=("adam", "lbfgs"), default="adam",
+                    help="adam tolerates the rough float32 loss; lbfgs needs float64 (CUDA/CPU) or it stalls at ~45 mHa")
+    ap.add_argument("--dtype", choices=("float32", "float64"), default="float32")
     ap.add_argument("--lbfgs-chunk", type=int, default=100, help="lbfgs: iterations per step() call (evaluation between chunks)")
     ap.add_argument("--bench", type=int, default=0, help="time this many steps and exit")
     ap.add_argument("--out-prefix", default="build/mps_")
@@ -205,7 +208,7 @@ def main() -> None:
     u, w, W = pr.load_state(args.init, base)
     if args.C and args.C < w.shape[2]:
         w, W = pr.prune_columns(w, W, args.C)
-    tr = Trainer(ref, base, u, w, W, args.device, args.a_gap, args.egap_target, args.beta, args.mu)
+    tr = Trainer(ref, base, u, w, W, args.device, args.a_gap, args.egap_target, args.beta, args.mu, dtype=args.dtype)
     m = tr.evaluate64()
     log(f"init {args.init} {w.shape} on {args.device}: e2 {1e3*m['error_2']:.3f} mHa  E_gap {m['E_gap']:.4f}  Lambda {m['Lambda']:.2f}")
     if args.bench:
