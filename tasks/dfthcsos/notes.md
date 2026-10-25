@@ -277,3 +277,15 @@ joint iterations: B 48 383 mHa, B 40 703, B 32 1,114 (confirms it is the wrong l
 residual, matrix-free Jacobian products (adjoint exact to 1e-15), CG on the damped normal equations: ~12 s per step
 at (65, 60, 60) with 15 CG iterations. On the baseline it moves 16.133 -> 15.80 mHa in 6 steps (L-BFGS: 15.69 after
 400 iterations), i.e. the baseline is at its local minimum; the test that matters is on the dropped-group states.
+
+Group dropping, stage 1 (65 -> 60, C 45; the five groups with the smallest contributions, 0.024-0.034 of a maximum
+2.795): 92.5 mHa cold, 79.9 after 100 (w, W) iterations, then joint L-BFGS 36.2 / 30.4 / 27.5 / 25.8 / 24.4 mHa at
+1k / 2k / 3k / 4k / 5k evaluations (40 min). Still ~1.2 mHa per 1,000 iterations at the end: reaching the ~16 mHa a
+brot-10 quantisation needs would take 10k+ more iterations for this stage alone. One-shot 65 -> 40: 115 mHa after
+7,000 evaluations. The optimiser, not the model, is the bottleneck (the public recipe spends 1e5 Adam steps per stage).
+Levenberg-Marquardt on the stage-1 state stalls (24.4 -> 23.1 mHa, then rejected steps). **Block variable projection**
+(`thc_fit.BlockVarPro`): for fixed points H = sum_r Us_r^T G_r Us_r is linear in the per-group G_r = w_r w_r^T, so the
+optimal weights solve sum_r' K[r,r'] G_r' K[r',r] + ridge G_r = Us_r T Us_r^T (K = dyad Gram, R B^2 = 216k unknowns)
+by CG at ~0.02 s per application; the point gradient is then the partial gradient with G fixed (Golub-Pereyra). The
+weights, the badly conditioned "fast" variables of the joint fit, are exact at every evaluation; only the points
+remain for L-BFGS. The rank-C PSD factor of G gives w at the end.

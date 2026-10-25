@@ -720,3 +720,98 @@ def gn_joint(prob: THCProblem, u: np.ndarray, w: np.ndarray, W: np.ndarray, iter
             f"lam {lam:.1e} {'ok' if ok else 'rejected'} cg {k+1}  ({time.time()-t0:.0f}s)")
     prob.set_W(W)
     return u, w, W
+
+
+# ---------------------------------------------------------------------------------------------
+# Block variable projection for the grouped (R, B, C) factorisation: for fixed points the two-body operator is
+# H = sum_r Us_r^T G_r Us_r, LINEAR in the per-group symmetric G_r = w_r w_r^T. The least-squares G solves
+#   sum_r' K[r, r'] G_r' K[r', r] + ridge G_r = Us_r T Us_r^T,   K = Us Us^T (the dyad Gram),
+# a symmetric positive system of R x B x B unknowns that CG applies in ~0.02 s. At the optimum the gradient in
+# the points is the partial gradient with G fixed (Golub-Pereyra): 4 G Us (H - T) through grad_outer.
+
+
+class BlockVarPro:
+    def __init__(self, prob, R: int, B: int, ridge: float = 1e-8, cg_iters: int = 400, cg_tol: float = 1e-9):
+        self.prob, self.R, self.B, self.ridge, self.cg_iters, self.cg_tol = prob, R, B, ridge, cg_iters, cg_tol
+        self.G = None  # warm start (R, B, B)
+
+    def solve_G(self, K: np.ndarray, Cm: np.ndarray) -> np.ndarray:
+        R, B = self.R, self.B
+        Kb = K.reshape(R, B, R, B).transpose(0, 2, 1, 3)  # (R, R', B, B): K[r, r'] blocks
+
+        def apply(G):  # L(G)_r = sum_r' K[r,r'] G_r' K[r',r] + ridge G_r
+            KG = np.einsum("rsab,sbc->rsac", Kb, G)  # K[r,s] G_s  (R, R', B, B)
+            out = np.einsum("rsac,rscd->rad", KG, Kb.transpose(1, 0, 2, 3))  # ... K[s,r] = Kb[s, r]
+            return out + self.ridge * G
+
+        G = np.zeros_like(Cm) if self.G is None else self.G.copy()
+        res = Cm - apply(G)
+        p = res.copy()
+        rs = np.sum(res * res)
+        bnorm = np.sqrt(np.sum(Cm * Cm))
+        for k in range(self.cg_iters):
+            Ap = apply(p)
+            alpha = rs / max(np.sum(p * Ap), 1e-300)
+            G += alpha * p
+            res -= alpha * Ap
+            rs_new = np.sum(res * res)
+            if np.sqrt(rs_new) < self.cg_tol * bnorm:
+                break
+            p = res + (rs_new / rs) * p
+            rs = rs_new
+        G = 0.5 * (G + G.transpose(0, 2, 1))
+        self.G = G
+        self.cg_used = k + 1
+        return G
+
+    def value_grad(self, u: np.ndarray, need_grad: bool = True):
+        prob, R, B = self.prob, self.R, self.B
+        sym, T = prob.sym, prob.T
+        Us = sym.of_outer(u)  # (R*B, NPAIR)
+        K = Us @ Us.T
+        TU = T @ Us.T  # (NPAIR, R*B)
+        Cm = np.stack([Us[r * B:(r + 1) * B] @ TU[:, r * B:(r + 1) * B] for r in range(R)])  # (R, B, B)
+        Cm = 0.5 * (Cm + Cm.transpose(0, 2, 1))
+        G = self.solve_G(K, Cm)
+        GU = np.concatenate([G[r] @ Us[r * B:(r + 1) * B] for r in range(R)], axis=0)  # (R*B, NPAIR)
+        H = Us.T @ GU
+        Res = H - T
+        f = float(np.sum(Res * Res))
+        if not need_grad:
+            return f, None, G
+        dUs = 4.0 * (GU @ Res)
+        return f, sym.grad_outer(dUs, u), G
+
+
+def block_varpro_points(prob, u: np.ndarray, R: int, B: int, maxiter: int = 200, ridge: float = 1e-8, tag: str = "",
+                        log=log, bvp: BlockVarPro | None = None):
+    from scipy.optimize import minimize
+
+    bvp = bvp or BlockVarPro(prob, R, B, ridge=ridge)
+    shape = u.shape
+    state = {"calls": 0, "t0": time.time()}
+
+    def fun(x):
+        f, g, _ = bvp.value_grad(x.reshape(shape))
+        state["calls"] += 1
+        if state["calls"] % 20 == 1:
+            log(f"  bvp{tag} call {state['calls']:5d}  e2 {1e3*np.sqrt(max(f, 0)):8.3f} mHa  cg {bvp.cg_used}  ({time.time()-state['t0']:.0f}s)")
+        return f, g.ravel()
+
+    res = minimize(fun, u.ravel(), jac=True, method="L-BFGS-B",
+                   options={"maxiter": maxiter, "maxcor": 30, "ftol": 1e-15, "gtol": 1e-13})
+    u = res.x.reshape(shape)
+    f, _, G = bvp.value_grad(u, need_grad=False)
+    log(f"  bvp{tag} done ({res.nit} it, {state['calls']} calls, {res.message}): e2 {1e3*np.sqrt(max(f, 0)):.3f} mHa")
+    return u, G, float(np.sqrt(max(f, 0)))
+
+
+def weights_from_G(G: np.ndarray, C: int):
+    """PSD rank-C factor of every block: w (R, B, C)."""
+    R, B, _ = G.shape
+    w = np.zeros((R, B, C))
+    for r in range(R):
+        lam, E = np.linalg.eigh(G[r])
+        idx = np.argsort(-lam)[:C]
+        w[r] = E[:, idx] * np.sqrt(np.clip(lam[idx], 0, None))[None, :]
+    return w
