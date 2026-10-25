@@ -491,3 +491,45 @@ sd_tables/sd_binary_F29_F119_FY28_GY2_drop5_L21S20_RB12.json --window 6 --fuse -
 public 82-qubit variant's generator is unpublished. Remaining levers we have not built: our own merged
 measurement-based unlookup (would remove the H-erase workspace peak, ≈ −3 Q), a second window group (−9
 Toffolis/direction, +2 Q), shared prefix flags (−6).
+
+## 13. Can this design reach Q ≤ 86 at ≤ +50 Toffolis? No (model and allocation budget, 2026-10-25)
+
+Live-qubit peaks of the step-2 circuit (`invsqrt_158560_c0910790`, Q 92). Base = x 22 + flags 4 (parity in x[21])
++ c2 8 + resid 12 + coarse 7 + L 21 = **74**.
+
+| point | live qubits | what is on top of the base |
+|---|---|---|
+| QROM lookup | **90** | H 8 + kickmix `init_lookup` workspace 8 |
+| high-word phase (fused) | 86 | H 8 + ext 3 + temp 1 |
+| high-word erase (`del_lookup`) | **90** | H 8 + workspace 8 |
+| inner rows | 84 | 10 carries |
+| narrow outer rows (window) | 88 | guard 2 + 12 carries |
+| wide outer rows (Cuccaro 4) | **92** | guard 2 + 15 carries + 1 carry-in |
+| low-word phase (fused) | 80 | guard 2 + ext 3 + temp 1 |
+
+Measured in the container: `init_lookup`/`del_lookup` over 8 address bits use 8 workspace qubits whether the target
+has 8, 21 or 56 bits (7 for 7 address bits, 6 for 6). So the lookup and the erase sit at 90 independently of the
+arithmetic, and the Cuccaro prefix / guard tricks can only pull the wide rows down to that floor (k ≥ 6, about +28
+Toffolis), i.e. **Q 90, not 86**. Getting below 90 needs a smaller base at lookup time, which means narrower
+registers, which the fit cannot give:
+
+| width change (model, all x) | result |
+|---|---|
+| FY 28 → 27 (L 21 → 20), GY 0 | max err/tol 1.121 — FAIL |
+| FY 27, GY 1 | 1.252 — FAIL |
+| F1 19 → 18 (R 18 → 17) | 1.238 — FAIL |
+| F1 20 or F2 10 with FY 27 | residual range exceeds 12 bits (layout fails) |
+| RB 12 → 11 | residual overflow (layout fails) |
+| LB 21 → 20 | low register overflows (e = 1 segments near M = 1: Q range is exactly 2^20) |
+
+Other ways to cut the lookup peak were costed and rejected: a second lookup so that L (or resid + coarse) is loaded
+after H is erased (+254 Toffolis); a constant-1 qubit for H's always-set MSB (H 7 bits: 90 → 89 only); our own
+unary-iteration QROM with 7 instead of 8 ancillas (−1); deferring H's measurement fix-up into a merged final
+unlookup (removes the erase peak, not the lookup peak). The window guard cannot be released early (its value is
+needed to unfold), and c2's 8 idle qubits during the outer rows cost a 254-Toffoli re-lookup to free.
+
+**Conclusion.** With a 2 × 128-segment QROM feeding 8 + 12 + 7 + 21 register bits, the floor of this architecture is
+Q 89–90 at ≈ 1,440 Toffolis (Cuccaro 6), roughly 157k — within 1 % of the committed 158,560. The public 82-qubit
+circuit must hold fewer bits at lookup time (a narrower L, no separate residual/coarse pair, or a different error
+split); our fit says those widths fail the 2^-24 tolerance in our pipeline, so matching it needs a different
+arithmetic, not more packing. Stopping here as agreed; `invsqrt_158560_c0910790` stays the submission circuit.
