@@ -15,11 +15,10 @@ mean of per-task improvement over the reference, `Score = (∏_b cost_ref_b / co
 | **dqi** (optimisation, Benchmark II) | reversible RS(4095,4025) syndrome decoder over GF(2¹²); cost R(ε⁺)×Q²×T | 2 | `docs/dqi.md` |
 | **dfthcsos** (chemistry, Benchmark III) | FeMoCo angle-loading QROMs; cost λ_eff×T×Q | 3 | `tasks/dfthcsos/notes.md` (spec: `data/verifiers/dfthcsos/SCORING_README.md`) |
 
-Verified baselines (official verifiers, this repo's Docker image, 2026-10-23): invsqrt **2,076,774.23**, dqi **2.444e13**,
-dfthcsos **3,355,599,588.32** — `runs/*_baseline_full.json`, recomputed in `results/verifier_checks.md`. In invsqrt/dqi
-**Q = `circuit.num_qubits`** (every distinct qubit id mentioned, not peak allocation — reuse ids), T = mean Toffoli-like gates
-executed per shot. dfthcsos scores a *family* of QROM circuits plus the factorisation they load (`tasks/dfthcsos/notes.md`:
-cost model, the 128-qubit cap, why the angle width needs a quantisation-aware refit). `data/verifiers/` is the spec.
+Verified baselines (official verifiers, this repo's Docker image, 2026-10-23): invsqrt **2,076,774.23**, dqi **2.444e13**, dfthcsos
+**3,355,599,588.32** (`runs/*_baseline_full.json`). In invsqrt/dqi **Q = `circuit.num_qubits`** (every distinct qubit id mentioned, not
+peak allocation — reuse ids), T = mean Toffoli-like gates executed per shot; dfthcsos scores a *family* of QROM circuits plus the
+factorisation they load (`tasks/dfthcsos/notes.md`: cost model, 128-qubit cap, quantisation-aware refit). `data/verifiers/` is the spec.
 
 ## Directory layout
 
@@ -40,17 +39,15 @@ scripts/                   # verify.sh (official verifier in Docker → runs/), 
 
 ## Build and run (Docker)
 
-Qualtran ships no Dockerfile; ours `pip install`s `third_party/Qualtran/kickmix` (pybind11 2.12.0, C++20,
-Python ≥ 3.10, numpy; plus scipy for the dfthcsos verifier) from the submodule pinned at **`638777fac4379bc62e2a1e4a52cf1a1753895d48`** (2026-10-22,
-kickmix 0.1), forced to `linux/amd64`. The source build reproduces the paper's baseline stats exactly.
+Qualtran ships no Dockerfile; ours `pip install`s `third_party/Qualtran/kickmix` (pybind11 2.12.0, C++20, Python ≥ 3.10, numpy; plus scipy
+for the dfthcsos verifier) from the submodule pinned at **`638777fac4379bc62e2a1e4a52cf1a1753895d48`** (kickmix 0.1), forced to `linux/amd64`.
 ```bash
 git submodule update --init --depth 1              # once, after clone
 docker compose build                                # minutes under emulation on Apple Silicon
 docker compose run --rm -T dev python <script.py>   # cwd is /work; -T for non-interactive use
 ```
-A git worktree has no `data/` or submodule checkout: put `VQCC_DATA=/abs/path/to/verifiable-qcc/data` in a gitignored `.env`
-and build the image with the main checkout as context (`docker build --platform linux/amd64 -t verifiable-qcc:dev -f Dockerfile <main checkout>`).
-The dfthcsos metric math (no kickmix) also runs natively: `tasks/dfthcsos/dfthc_tools.py` needs only numpy/scipy.
+Worktrees have no `data/` or submodule: put `VQCC_DATA=/abs/path/to/verifiable-qcc/data` in a gitignored `.env` and build the image
+from the main checkout. The dfthcsos metric math (`tasks/dfthcsos/dfthc_tools.py`, no kickmix) also runs natively with numpy/scipy.
 The Kaggle-shipped `data/kickmix/kickmix.so` needs `GLIBCXX_3.4.32` (gcc ≥ 13) and does not load on bookworm;
 TODO only if a discrepancy ever appears: rebuild on a trixie/ubuntu-24.04 base and compare.
 
@@ -96,10 +93,7 @@ ancillas fail. Z_POW exponent t phases by e^{iπt} at 2⁻¹²⁷ precision — 
 ## Links
 
 - Competition: https://www.kaggle.com/competitions/google-verifiable-quantum-circuit-compilation
-- Qualtran repo: https://github.com/quantumlib/Qualtran — kickmix source `kickmix/`, format/instruction/API/dev docs
-  `docs/kickmix/*.md` (same paths inside `third_party/Qualtran/`)
-- Companion paper (Khattar, Rubin, Gidney, Broughton, Low, Babbush): https://arxiv.org/abs/2610.23832 —
-  HTML https://arxiv.org/html/2610.23832 (§III.A invsqrt, §III.B dqi, Eq. 43 R(ε), Eq. 44 dfthcsos)
+- Qualtran repo: https://github.com/quantumlib/Qualtran — kickmix source `kickmix/`, docs `docs/kickmix/*.md` (same paths in the submodule)
+- Companion paper (Khattar et al.): https://arxiv.org/abs/2610.23832 — HTML https://arxiv.org/html/2610.23832 (§III.A invsqrt, §III.B dqi, Eq. 43 R(ε), Eq. 44 dfthcsos)
 - Announcement: https://opensource.googleblog.com/2026/10/announcing-verifiable-quantum-circuit-compilation-competition-on-kaggle.html
-- Prior kickmix paper (ECC): https://arxiv.org/abs/2603.28846 · dfthcsos starter kit (unused):
-  https://www.kaggle.com/datasets/sohier/verifiable-circuit-compilation-starter-kit
+- Prior kickmix paper (ECC): https://arxiv.org/abs/2603.28846 · starter kit: https://www.kaggle.com/datasets/sohier/verifiable-circuit-compilation-starter-kit
