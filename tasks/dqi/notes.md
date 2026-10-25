@@ -214,3 +214,36 @@ Conclusion: with the syndromes live, Q ≥ 1,723 + minimal scratch for any BM/EE
 costs). A Q of 1,300 needs a decoder that *consumes* the syndromes while finding σ; the two obstacles are quantum
 alignment (the recurrence relating a dead syndrome to live ones is indexed by L) and the id argument above. Nothing
 here clears the break-even rule; round 3 is therefore a negative result on Q for this architecture.
+
+## 7. In-place (syndrome-consuming) decoder: research result (round 4, 2026-10-25)
+
+Facts from the classical model (`probe_dead.py`, 4,096 shots): step n′ reads S[n′−L_{n′−1} .. n′]; the smallest index any
+later step reads is ≥ min(n+1−L_n, L_n−1) (282,624/282,624 checks). Classical lower envelope: at step n the syndromes
+S[0 .. ⌊n/2⌋−3] are dead for every sampled shot. Interior coefficients C_c (0 < c < L) vanish with rate 1.8e-4.
+
+What an in-place scheme must do: zero a dead syndrome S[j] at step n by XORing into it a function of *other live*
+registers. The only available relations are the recurrences D(p) = Σ_k C_k S[p−k] = 0, L+1 ≤ p ≤ n, in which S[j]
+carries coefficient C_{p−j}. Three obstacles, each fatal on its own:
+
+1. **Identity of the freed register.** Q counts ids, so the freed register must be classically known (fixed j_n) and
+   must be zero for *every* shot when another value takes its ids. Any scheme that erases "S[n−L]" or gates the
+   erasure on a quantum flag frees different registers in different shots and cannot reuse them.
+2. **Alignment.** With a classical j, the relation anchored at the top coefficient (c = L, the only interior-or-top
+   coefficient that is guaranteed nonzero besides C_0) has p = j + L, a quantum position: either C or the syndrome
+   window must be rotated by L (6 controlled rotations of a 36-slot array ≈ 2.6k CSWAP, twice per step), i.e.
+   ≥ 5k Toffolis/step → T ≈ 1.6M at Q ≈ 1,500: Q²T ≈ 3.6e12 > 2.82e12. A top-aligned copy of C avoids the rotation
+   but costs 36 slots and a second product set, more than the ≤ 32 slots it frees.
+3. **Order.** The classically aligned relation anchored at C_0 (p = j) expresses S[j] through *older* syndromes, so
+   erasures would have to run from newer to older while syndromes die from older to newer; any other classical
+   anchor c (0 < c < L) also reaches older indices (p − L < j) unless c = L, and its coefficient vanishes with
+   probability 1.8e-4 per erasure (≈ 0.6 % of shots over 35 erasures → R ≈ 1.8). Two alternative anchors cost a
+   second product set.
+
+Costed variants (all per BM step, both passes): rotate-by-L erasure ≈ 5k → fails; relation at position n with the
+new C plus selection of C_L, the prefix and the target by unary iteration over L (≈ 3 × 432 + 36 products + inverse
+≈ 3.3k) → Q ≈ 1,500, T ≈ 1.24M, Q²T ≈ 2.8e12 — break-even at best, and it violates obstacle 1 (the erased index is
+n−L). Euclid-style states are 141 slots at every step (notes §4b); PGZ/Hankel elimination cannot be done in place
+because syndromes are shared between matrix entries. No candidate clears the rule, so nothing is built.
+
+Verdict: for BM/EEA decoders the syndromes stay live and Q ≥ 1,723 + scratch. A genuinely smaller Q needs a decoder
+whose state is the error list rather than (S, σ, B) — not a variant of BM — and we have no such algorithm.
