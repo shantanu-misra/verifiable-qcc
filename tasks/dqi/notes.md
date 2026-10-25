@@ -180,3 +180,37 @@ Where the remaining T sits (v13, analyzer): sweep 372,645 (4,095 × 91: zero tes
 bm_forward 222,294 (discrepancy 71,094, update 74,460, erase_nu 43,120, cswap 18,360, quotient 8,890); bm_reverse
 154,770 (same minus the discrepancy); omega_inplace 34,033 each way. The public circuit's 583k differs mainly in the BM passes (241k vs ≈ 360k): the quotient
 erasure, the role swap and the per-step division are the price of this reversible formulation.
+
+## 6. Live-qubit profile of v13 and the Q question (round 3, 2026-10-25)
+
+`live_profile.py` logs `CircuitBuilder.num_allocated_qubits` at every alloc/free (189,677 samples) — exact, since
+kickmix reuses freed ids and `num_qubits` = peak allocation here (1,856 = 1,856).
+
+| phase | max live | composition at the max |
+|---|---|---|
+| bm_forward / bm_reverse | **1,856** in all 140 steps, inside `erase_nu` | base 1,723 (S 840, A2 36×12, A1 36×12, b 12, L 7) + recursion scratch 133 (ν 12, B0..B2 36, inv 12, q0,t1,q1,t2,q2 60, flags/zero bits 13) |
+| sweep | 1,792 | base + inverse scaffold and ladder (69) |
+| omega_inplace (both) | 1,766 | base + s⁻¹, p, products (43) |
+
+So the peak is a flat plateau set by the BM working set, not a spike: every step reaches it because A2 and A1 are
+allocated at their full 36-slot bound (needed at the end, L = 35) and all 70 syndromes stay live.
+
+Break-even rule (R fixed): Q′²·T′ < 1,856² × 817,684 = 2.82e12.
+
+| candidate | Q′ | T′ | Q′²T′ / 2.82e12 | verdict |
+|---|---|---|---|---|
+| recursion scratch: recompute t1/q1 instead of keeping them (−24 qubits, +~200 Toffolis/step) | 1,832 | 846k | 1.008 | reject (loss) |
+| recursion: controlled products instead of B1/B2 registers (−24, +~380/step) | 1,832 | 871k | 1.04 | reject |
+| recursion: only j ≤ 1 branches (−24, no T cost) | 1,832 | 818k | 0.97 | reject: 0.7 % of shots fail (R ≈ 1.9) |
+| A2/A1 at true degree (lazy slots) | 1,856 | 818k | 1.00 | no gain: the peak is at the end of BM where both are full |
+| free B or σ during the sweep | 1,856 | — | 1.00 | the sweep (1,792) is not the peak |
+| erase dead syndromes S_j, j ≤ n−35, during BM | ≈1,480 | ≥ 1.8M | ≥ 1.4 | reject: the recurrence that gives S_{n−35} anchors at C_L (quantum offset); classical alignment needs a controlled rotation of a 36-slot array by L (≈ 2.6k CSWAP, twice) per step |
+| erase S_{n−L} (classically anchored at position n) when dead | — | — | — | reject on identity grounds: *which* syndrome is dead is quantum (depends on L), and Q counts ids, so a register whose content is zero only for some shots cannot be reused by another value — only a classically known id can be freed |
+| in-place Euclid (reference layout) | 1,893 | — | — | two 73-slot rows: worse than BM's 141 slots |
+| recompute S from (σ, ω) and run the passes without S | — | — | — | BM must read S every step in both passes; the sweep, which could run without S, is not the peak |
+
+Conclusion: with the syndromes live, Q ≥ 1,723 + minimal scratch for any BM/EEA formulation, and the recursion's
+133 scratch qubits cannot be traded for Toffolis at a profit (24 qubits = 2.6 % of Q², less than the recomputation
+costs). A Q of 1,300 needs a decoder that *consumes* the syndromes while finding σ; the two obstacles are quantum
+alignment (the recurrence relating a dead syndrome to live ones is indexed by L) and the id argument above. Nothing
+here clears the break-even rule; round 3 is therefore a negative result on Q for this architecture.
