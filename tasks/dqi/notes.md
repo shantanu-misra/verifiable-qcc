@@ -341,3 +341,30 @@ the reciprocal's updates of the top s cells are routed through a delta register 
 real ([k < n − s], 12 Toffolis per d-pass per protected cell), delta erased by measurement. Conversion treats each
 shifted level as p′ = x·c·q (one extra coefficient, taken from the borrowed zero by a controlled rotation). Second-
 order gaps (w₀ = w₁ = 0, w₂ ≠ 0, ≈ 2e-6/shot) stay approximate, as in the public design.
+
+### 9c. Gap handling as built (one first-order gap, pointer + rotation)
+
+Full-scale ordinary chart (no gap handling, `dqi_cf1`): smoke run 2,560 shots → 0 value errors, 12 phase errors (all
+gap shots), Q 921, T ≈ 2.82 M (statistics; not a score). Model facts (20,480 verifier shots, `model_cf_gaps.py`):
+weight histogram peaks at 31–32, weight 35 is 2.7 %; gap shots 0.70 % (one gap 0.70 %, two gaps 0.01 %).
+
+Design (the "plain" scheme, exact for weight ≤ 34): at level k, g = [w₀ = 0 ∧ w₁ ≠ 0 ∧ no gap yet]; if g, rotate the
+window left by one (the zero goes to cell 69, which stays a protected zero) and write k+1 into a 6-qubit pointer; g is
+erased by recomputing [ptr = k+1]. The ordinary level then runs on f/x; the reciprocal's writes to the last cell are
+gated by F = [ptr = 0] (product into a temporary, 12 CCX, free erase), scaling a zero cell is harmless. Conversion is
+the ordinary arithmetic; at the gap level P' = x·cQ is realised by rotating the P cell list right by one (controlled
+on [ptr = k+1]); the spare top cell of Q supplies the zero. The pointer is freed after the reverse extraction.
+Cell model `model_cf_gaps.py --cells`: exact on all shots except weight 35 with a gap (3 of 4 such shots: the J-fraction
+of f/x needs 71 coefficients) and two-gap shots; expected ≈ 20–25 failures per 102,400 → R ≈ 1.25–1.27.
+Toy circuits (GF(2⁴) n=8, GF(2⁶) n=12): cells+pointer match the model on 384 shots; full decode has phase errors only
+on model-wrong inputs (6/256 and 0/128), 0 value errors.
+
+Verifier failure table (N = 102,400, Clopper–Pearson at 2⁻¹²⁸): failures 0→R 1.1913, 1→1.1967, 5→1.2131, 10→1.229,
+20→1.2548, 25→1.2659, 50→1.3134. So the weight-35 gap shots (≈19 per run) cost ≈ 5 % — worth an exact gap level
+(A of degree 2, second rotation parking a₂, ≈ 100 k Toffolis) only while T ≳ 2.5 M.
+
+**v15 = `dqi_3042909973384_df7d3863.kmb` (build_cf.py, gaps on): full PASS, score 3.0429e12 (8.03×), Q 927,
+T 2,888,132.43, 0 value / 9 phase failures (ε⁺ 1.16e-3, R 1.2261)** — `runs/dqi_3042909973384_df7d3863_full.json`.
+−8.5 % vs v14 with the naive reciprocal chain; the T budget is now the shears (≈ 2.2 M of 2.89 M), then the sweep (0.37 M).
+Q profile (live_profile on m=63): sweep/forney_step peaks at 927, extraction 903, conversion 902, base 858 = 840 cells +
+6 pointer + 12 for the constant-one register of A2[0] (removable: fold q₀ = 1 into the sweep's sums).

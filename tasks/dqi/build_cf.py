@@ -16,9 +16,76 @@ from tower import apply_gf2_matrix
 
 
 class CFDecoder(BMDecoder):
-    def __init__(self, builder, n, field, m_positions):
+    def __init__(self, builder, n, field, m_positions, gaps=True):
         super().__init__(builder, n, field, m_positions)
         self.frob = {}
+        self.gaps = gaps          # handle one first-order gap exactly (pointer + rotation), see notes §9c
+        self.ptr = None           # pointer register: 1-based index of the gap level, 0 = none
+
+    # ---- gap handling ------------------------------------------------------------------------------
+    def eq_const(self, reg, const, target):
+        """target ^= (reg == const)."""
+        for i in range(len(reg)):
+            if (const >> i) & 1:
+                self.b.x(reg[i])
+        self.is_zero(reg, target)
+        for i in range(len(reg)):
+            if (const >> i) & 1:
+                self.b.x(reg[i])
+
+    def rotate(self, cells, ctrl, *, left):
+        """Cyclic rotation of the cell contents by one position, controlled on ctrl (left: cells[0] -> end)."""
+        pairs = [(i - 1, i) for i in range(1, len(cells))]
+        for i, j in (pairs if left else reversed(pairs)):
+            self.b.cswap(ctrl, cells[i], cells[j])
+
+    def gated_xor(self, flag, src, dst):
+        for s, d in zip(src, dst):
+            self.b.ccx(flag, s, d)
+
+    def flag_acquire(self):
+        """F = [no gap so far] = 'the last window cell is a real coefficient'."""
+        F = self.b.alloc_qubits(1)[0]; self.is_zero(self.ptr, F); return F
+
+    def flag_release(self, F):
+        self.is_zero(self.ptr, F); self.b.free(F)
+
+    def _gap_flag(self, active, R1, g):
+        """g ^= [active[0] == 0 and active[1] != 0 and R1]."""
+        b = self.b
+        z0, z1, t = b.alloc_qubits(3)
+        self.is_zero(active[0], z0); self.is_zero(active[1], z1)
+        b.x(z1); b.ccx(z0, z1, t); b.ccx(t, R1, g); b.ccx(z0, z1, t); b.x(z1)
+        self.is_zero(active[1], z1); self.is_zero(active[0], z0)
+        b.free(z0); b.free(z1); b.free(t)
+
+    def gap_enter(self, active, k):
+        """Level k: if the pivot is zero (and no gap yet) rotate the zero to the end and record k+1 in the pointer."""
+        b = self.b
+        R1, g = b.alloc_qubits(2)
+        self.is_zero(self.ptr, R1)
+        self._gap_flag(active, R1, g)
+        for i in range(len(self.ptr)):
+            if ((k + 1) >> i) & 1:
+                b.cx(g, self.ptr[i])
+        self.is_zero(self.ptr, R1); b.cx(g, R1)          # R1 -> 0
+        self.rotate(active, g, left=True)
+        self.eq_const(self.ptr, k + 1, g)                 # g -> 0
+        b.free(R1); b.free(g)
+
+    def gap_leave(self, active, k):
+        """Inverse of gap_enter."""
+        b = self.b
+        R1, g = b.alloc_qubits(2)
+        self.eq_const(self.ptr, k + 1, g)
+        self.rotate(active, g, left=False)
+        b.cx(g, R1); self.is_zero(self.ptr, R1)          # R1 = old R1
+        for i in range(len(self.ptr)):
+            if ((k + 1) >> i) & 1:
+                b.cx(g, self.ptr[i])
+        self._gap_flag(active, R1, g)                     # g -> 0
+        self.is_zero(self.ptr, R1)                        # R1 -> 0
+        b.free(R1); b.free(g)
 
     # ---- helpers ------------------------------------------------------------------------------------
     def frob_matrix(self, d: int):
@@ -71,9 +138,27 @@ class CFDecoder(BMDecoder):
         self.is_zero(pivot, z)
         b.free(z)
 
-    def reciprocal(self, words, *, reverse: bool = False):
-        """In-place unit-series inverse of [1] + words (the leading 1 is implicit): a <- a * a^(d), d = 2, 4, 16..."""
+    def reciprocal(self, words, *, reverse: bool = False, gate=None):
+        """In-place unit-series inverse of [1] + words (the leading 1 is implicit): a <- a * a^(d), d = 2, 4, 16...
+        With `gate`, writes to the last cell happen only if gate is set (the cell may be a parked zero)."""
         b = self.b
+        gtmp = [None]
+
+        def write(x, y, k):                            # a[k] ^= x * y (y None: times 1)
+            target = words[k - 1]
+            if gate is not None and k == len(words):
+                if y is None:
+                    self.gated_xor(gate, x, target)
+                else:
+                    if gtmp[0] is None:
+                        gtmp[0] = b.alloc_qubits(self.deg)
+                    self.xor_prod(x, y, gtmp[0])
+                    self.gated_xor(gate, gtmp[0], target)
+                    b.del_gf2_mul(x, y, target=gtmp[0], field=self.gf)
+            elif y is None:
+                b.cx(x, target)
+            else:
+                self.xor_prod(x, y, target)
         n = len(words) + 1                            # a[0] = 1 implicit, a[k] = words[k - 1]
         d, exponent, factors = 2, 1, []
         while exponent < n - 1:
@@ -89,29 +174,37 @@ class CFDecoder(BMDecoder):
                 if tmp is None:
                     tmp = b.alloc_qubits(self.deg)
                 b.cx(words[i - 1], tmp); self.frob_inplace(tmp, d)
-                self.xor_prod(tmp, words[i - 1], words[k - 1])
+                write(tmp, words[i - 1], k)
                 self.unfrob_inplace(tmp, d); b.cx(words[i - 1], tmp)
                 continue
             self.frob_inplace(words[i - 1], d)
-            if j == 0:
-                b.cx(words[i - 1], words[k - 1])      # times a[0] = 1
-            else:
-                self.xor_prod(words[i - 1], words[j - 1], words[k - 1])
+            write(words[i - 1], None if j == 0 else words[j - 1], k)
             self.unfrob_inplace(words[i - 1], d)
         if tmp is not None:
             b.free(tmp)
+        if gtmp[0] is not None:
+            b.free(gtmp[0])
 
     def extract(self, words, *, reverse: bool = False):
         levels = range(0, len(words), 2)
         for start in (reversed(levels) if reverse else levels):
             active = words[start:]
+            k = start // 2
             with self.b.mark('cf_level'):
                 if reverse:
-                    self.reciprocal(active[1:], reverse=True)
+                    F = self.flag_acquire() if self.gaps else None
+                    self.reciprocal(active[1:], reverse=True, gate=F)
                     self.scale_words(active[0], active[1:], divide=False)
+                    if self.gaps:
+                        self.flag_release(F); self.gap_leave(active, k)
                 else:
+                    if self.gaps:
+                        self.gap_enter(active, k)
+                    F = self.flag_acquire() if self.gaps else None
                     self.scale_words(active[0], active[1:], divide=True)
-                    self.reciprocal(active[1:])
+                    self.reciprocal(active[1:], gate=F)
+                    if self.gaps:
+                        self.flag_release(F)
 
     def convert(self, words, *, reverse: bool = False):
         """Bottom-up in place: for level (c, a) with current (P, Q): Q' = (1 + a x) Q + x^2 P, P' = c Q.
@@ -120,12 +213,14 @@ class CFDecoder(BMDecoder):
         P, Q, stages = [], [], []
         for start in reversed(range(0, len(words), 2)):
             c, a = words[start], words[start + 1]
-            stages.append((c, a, list(P), list(Q)))
+            stages.append((start // 2, c, a, list(P), list(Q)))
             P, Q = [c] + Q, [a] + P
-        for c, a, oldP, oldQ in (reversed(stages) if reverse else stages):
+        for lvl, c, a, oldP, oldQ in (reversed(stages) if reverse else stages):
             k = len(oldP)                             # len(oldQ) == k as well
             with b.mark('cf_convert'):
                 if reverse:
+                    if self.gaps and k:
+                        self.shift_p([c] + oldQ, lvl, left=True)
                     self.scale_words(c, oldQ, divide=True)
                     if k:
                         b.cx(oldQ[0], a)
@@ -138,12 +233,24 @@ class CFDecoder(BMDecoder):
                     if k:
                         b.cx(oldQ[0], a)              # q'_1 = a + q_1
                     self.scale_words(c, oldQ, divide=False)   # p'_j = c q_j
+                    if self.gaps and k:
+                        self.shift_p([c] + oldQ, lvl, left=False)   # gap level: P' = x c Q
         return P, Q
+
+    def shift_p(self, cells, lvl, *, left):
+        """Rotate the P cell list by one, controlled on [this level was the gap level]."""
+        g = self.b.alloc_qubits(1)[0]
+        self.eq_const(self.ptr, lvl + 1, g)
+        self.rotate(cells, g, left=left)
+        self.eq_const(self.ptr, lvl + 1, g)
+        self.b.free(g)
 
     # ---- full decoder ---------------------------------------------------------------------------------
     def build(self, S, E):
         b = self.b
         words = list(S)
+        if self.gaps:
+            self.ptr = b.alloc_qubits(max(3, (len(S) // 2).bit_length()))
         with b.mark('cf_extract'):
             self.extract(words)
         with b.mark('cf_to_poly'):
@@ -158,14 +265,16 @@ class CFDecoder(BMDecoder):
             self.convert(words, reverse=True)
         with b.mark('cf_unextract'):
             self.extract(words, reverse=True)
+        if self.gaps:
+            b.free(self.ptr); self.ptr = None
 
 
-def build_circuit(n: int, degree: int, m: int) -> km.Circuit:
+def build_circuit(n: int, degree: int, m: int, gaps: bool = True) -> km.Circuit:
     gf = km.GF2Field(degree)
     b = km.CircuitBuilder()
     S = [b.create_quantum_register(degree, name=f'S{i}') for i in range(n)]
     E = [b.create_classical_register(degree, name=f'E{j}') for j in range(m)]
-    CFDecoder(b, n, gf, m).build(S, E)
+    CFDecoder(b, n, gf, m, gaps=gaps).build(S, E)
     return b.finish_circuit()
 
 
@@ -173,9 +282,9 @@ if __name__ == '__main__':
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument('output'); ap.add_argument('--n', type=int, default=70); ap.add_argument('--degree', type=int, default=12)
-    ap.add_argument('--m', type=int, default=4095)
+    ap.add_argument('--m', type=int, default=4095); ap.add_argument('--no-gaps', action='store_true')
     a = ap.parse_args()
-    c = build_circuit(a.n, a.degree, a.m)
+    c = build_circuit(a.n, a.degree, a.m, gaps=not a.no_gaps)
     c.to_file(a.output, format='kmb' if a.output.endswith('.kmb') else 'kmx')
     st = c.operation_statistics()
     print(f'wrote {a.output}: toffoli_like={st.num_toffoli_like} num_qubits={c.num_qubits} ops={len(c)}')
