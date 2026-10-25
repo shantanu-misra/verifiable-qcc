@@ -276,3 +276,25 @@ Built as v14 (the shift counter was dropped: its reset at a length change is irr
 recursion's zero flag and gate instead, −29/step; leaf GF(2³) inverse as N²·N⁴ with N⁴ kept as the 3-qubit scaffold,
 −1 per inverse): 810,176 static Toffolis, Q 1,856 — **full PASS: score 3.3243e12 (7.35×), T 810,085.9, 0/0** —
 `runs/dqi_3324250406015_ee5f2540_full.json`.
+
+### 8b. Formulations without a per-step quotient erasure (round 6, 2026-10-25) — none clears the rule
+
+The junk is intrinsic to a no-length-change step: C ← C ⊕ ν x^m B destroys C_old, and ν is then a function of
+(C_new, B) only through the power-series quotient (the recursion). Every alternative either moves the junk or pays
+for it elsewhere:
+
+| formulation | per-step effect vs v14 | ΔQ | verdict |
+|---|---|---|---|
+| keep ν as junk during the division, erase the whole quotient at the next length change (depth-δ recursion once per division) | the recursion is still present in every step (static circuit): no change | 0 | reject |
+| skip slot m in the update and carry the term ν·B[0] implicitly (one extra product per discrepancy), materialise at the next lc | δ = 2 support needs two junk registers and the depth-2 recursion anyway: ≈ 626 vs 606 | +12..+24 | reject |
+| erase ν₁ by a depth-1 recursion at j = 1 and ν₂ by a depth-2 one at j = 2 (separate machinery) | both run every step: 269 + 606 | 0 | reject |
+| implicit C = X ⊕ Q(x)·C_old during a division (discrepancies of X and of C_old kept, no C update) | needs disc(C_old, ·) at δ+1 positions and the materialisation of both C′ and C″ at the lc: ≈ 6L vs 4L+24 products per two steps | 0 | reject |
+| two row operations at the lc so that C stays unscaled (C₀ = 1, b ≡ 1) and the recursion needs no inverse | second row op = L products (+1,064), −262 cswap −51 −116 | −12 | reject (+635/step) |
+| store κ = 1/B[0] once per division (recursion inverse-free) | κ must be erased at the next lc: another inverse of a quantum-indexed slot | +12 | reject |
+| make B[0] equal to b so one inverse serves division and recursion | impossible: B[0]/b = 1/d_true is scale-invariant | — | reject |
+| avoid δ = 2 divisions (the j = 2 branch costs ≈ 200/step) by splitting a late length change | not an algebraic identity of BM; zero discrepancies are data | — | reject |
+| cheaper selections (rotate A1[0..4] by j instead of controlled copies) | 120 CSWAP vs 72 copies | 0 | reject |
+
+Conclusion: within scaled-BM with a physically shifted B, the per-step erasure (inverse + 6 products + selections,
+≈ 600 Toffolis) is minimal for j ≤ 2 support, and the public circuit's cheaper BM step must rest on a bookkeeping we
+have not identified. T work on the BM passes stops here; v14 stands.
