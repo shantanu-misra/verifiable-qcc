@@ -223,3 +223,48 @@ training (or a public dataset). Options: (a) stop at the verified 1.38x family (
 (b) continue the SOS-THC fit (days); (c) the group-dropping route R 65 -> ~26 on the baseline structure (the training
 session measured 26-55 mHa after short refits for R 62-57; the public recipe uses 100k+ Adam steps per stage, ~12 h
 per stage here); (d) a public factorisation dataset (the user's call).
+
+## 8. SOS-THC continuation (2026-10-25, user's choice: continue)
+
+Structure of the baseline that a THC fit must copy (all numbers exact):
+- offsets: W_rc = -k tr X_rc with k = 1.434 (corr(W, -s) = 0.9966, s_rc = sum_b w_rbc = tr X_rc for unit rows); the
+  one-body absorption sum W X has trace -748.6 against tr h1_base = -758.3, leaving tr h1' = -9.68;
+- sum_c tr(X_c)^2 = s(I)^T T s(I) = K_T = 521.85 is fixed by T for *any* decomposition, so 0.5 sum W^2 = 0.5 k^2 K_T
+  (540.5 at k 1.434) and E_gap = -559.13 + 260.9 k^2 + 2 negmass(h1_base + k sum_c s_c X_c): k is the one scalar
+  that sets E_gap;
+- columns nearly single-signed in the weighted sense: sum_c ||w_c||_1 / sum_c |s_c| = 1.08, so
+  Lambda_2 = 1/4 sum_c (||w_c||_1 + |W_c + s_c|)^2 = 1/4 [611.6 + 464.9 + 105.8] = 295.6, 9 % above 1/4 sum W^2.
+With PSD columns (w >= 0) and W_c = -k s_c the term is exactly k^2 s_c^2 and Lambda_2 = 1/4 k^2 K_T = 268.6: the floor.
+Design for THC: w = v*v, W_c = -s_c - t_c^2 (t initialised at sqrt((k-1) s_c)), points shared; initialise from the
+baseline itself by consolidating its 3,900 points (k-means on dyads) and its 3,900 columns (symmetric NMF of
+Z = w'w'^T), then L-BFGS and Gauss-Newton (`gn_varpro`: Kaufman Jacobian, CG on the normal equations).
+
+THC probes closed: the Gauss-Newton Jacobian is right (the finite-difference mismatch scaled linearly with the step),
+and 40 LM iterations move the B 496 fit 74.45 -> 74.33 mHa: a genuine flat minimum. Consolidating the baseline's
+points by k-means (B 400) costs 7.8 Ha before any refit (the groups' points are not shared directions), and compressing
+its 3,900 columns by symmetric NMF to 384 loses 8 Ha for a 0.75 % relative error in Z: no usable THC start from the
+baseline either. THC from scratch is parked.
+
+**Within-group point pruning** (keep the baseline's 65 groups, fewer points each) is priced far better than I had
+assumed, because at J 10 the lookups are ~16 A Toffolis over both passes and the inner PREPARE drops a QROAM level
+at B <= 31 (temporaries 544 -> 511, b2 17 -> 16):
+
+| shape | A | T (heur) | Q | ratio @ 47.5 |
+|---|---|---|---|---|
+| (65,60,45) | 3,976 | 74,608 (11,008) | 734 | 1.29 (verified 1.38 uses the 2-bank J 5 family: same T, Q 684) |
+| (65,48,45) | 3,196 | 62,032 | 734 | 1.55 |
+| (65,40,45) | 2,676 | 53,648 | 734 | 1.79 |
+| (65,31,45) | 2,091 | 43,919 (10,479) | 699 | 2.30 |
+| (65,24,45) | 1,636 | 36,583 | 699 | 2.76 |
+| (65,16,45) | 1,116 | 28,135 | 667 | 3.76 |
+| (65,15,30) | 1,051 | 24,792 (7,992) | 662 | 4.30 |
+| (39,31,45) | 1,285 | 28,364 | 695 | 3.58 |
+
+(For A <= ~2,100 the 2-bank J 5 family costs about the same: 15 A + 4,140 Toffolis vs 16 A, Q -50.) `prune.py` keeps
+the B' highest-energy points per group and refits (u, w, W) with the full loss through `THCProblem`.
+
+Within-group pruning is destructive: (65, 48, 45) from the baseline costs 1.19 Ha cold (20 % of the points, each
+group's 60 dyads are a near-basis for its own columns), against 57 mHa for dropping three whole groups (5 % of the
+points) measured by the training session: ~5x gentler per removed point. Switched to **group dropping** with long
+joint refits (u, w, W; E_gap target 3.918; `prune.py --R`): 65 -> 60 -> 55 -> ... -> 26, groups ranked by their
+contribution ||sum_c X_rc (x) X_rc||_F, 1,500 L-BFGS iterations per stage (~15 min at R 60).

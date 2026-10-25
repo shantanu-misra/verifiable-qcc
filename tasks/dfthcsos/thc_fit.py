@@ -549,3 +549,93 @@ def lbfgs_sos(prob: THCProblem, u, v, t, *, maxiter=300, tag="", log=log, opt_u=
     log(f"  sos{tag} done ({res.nit} it, {state['calls']} calls, {res.message}): e2 {1e3*r['error_2']:.3f} mHa  "
         f"E_gap {r['E_gap']:.4f}  Lambda {r['Lambda']:.2f}  lam_eff {r['lambda_eff']:.3f}")
     return uu, vv, tt, r
+
+
+# ---------------------------------------------------------------------------------------------
+# Levenberg-Marquardt / Gauss-Newton on the variable-projection residual with the Kaufman Jacobian
+# (Z held at its optimum during each step), normal equations solved by CG with matrix-free products.
+#   r(u) = T - U^T Z U,  J d = -(dU^T Z U + U^T Z dU),  dU_b = s(u_b d_b^T + d_b u_b^T),
+#   J^T S = -2 grad_outer(Z U S, u)  (S symmetric).
+
+
+def _dU(sym, u, d):
+    """Directional derivative of s(u u^T) rows along d: s(u d^T + d u^T)."""
+    return (u[:, sym.P] * d[:, sym.Q] + d[:, sym.P] * u[:, sym.Q]) * sym.scale
+
+
+def gn_varpro(prob, u: np.ndarray, iters: int = 30, cg_iters: int = 20, lam: float = 1e-3, tag: str = "", log=log):
+    sym = prob.sym
+    T = prob.T
+    f, g, Z = varpro_u_value_grad(prob, u)
+    log(f"  gn{tag} start: projection error {1e3*np.sqrt(f):.3f} mHa")
+    t0 = time.time()
+    for it in range(iters):
+        Us = sym.of_outer(u)
+        ZU = Z @ Us  # (B, NPAIR)
+        H = Us.T @ ZU
+        r = T - H
+        gradf = 4.0 * sym.grad_outer(ZU @ (H - T), u)  # = 2 J^T r
+        rhs = -0.5 * gradf  # -J^T r
+
+        def Jd(d):
+            dU = _dU(sym, u, d)
+            A = dU.T @ ZU
+            return -(A + A.T)
+
+        def JtS(S):
+            return -2.0 * sym.grad_outer(ZU @ S, u)
+
+        def JtJ(d):
+            return JtS(Jd(d)) + lam * d
+
+        # CG
+        x = np.zeros_like(u)
+        res = rhs - JtJ(x)
+        p = res.copy()
+        rs = np.sum(res * res)
+        for k in range(cg_iters):
+            Ap = JtJ(p)
+            alpha = rs / max(np.sum(p * Ap), 1e-300)
+            x += alpha * p
+            res -= alpha * Ap
+            rs_new = np.sum(res * res)
+            if np.sqrt(rs_new) < 1e-10 * np.sqrt(np.sum(rhs * rhs)):
+                break
+            p = res + (rs_new / rs) * p
+            rs = rs_new
+        # trial step with VarPro re-solve
+        u_try = u + x
+        f_try, g_try, Z_try = varpro_u_value_grad(prob, u_try)
+        if f_try < f:
+            u, f, g, Z = u_try, f_try, g_try, Z_try
+            lam = max(lam / 3.0, 1e-12)
+            accepted = True
+        else:
+            lam *= 10.0
+            accepted = False
+        if it % 1 == 0:
+            log(f"  gn{tag} it {it:3d}  projection error {1e3*np.sqrt(f):8.3f} mHa  lam {lam:.1e}  {'ok' if accepted else 'rejected'}  "
+                f"cg {k+1}  ({time.time()-t0:.0f}s)")
+    u = u / np.linalg.norm(u, axis=1, keepdims=True)
+    f, _, Z = varpro_u_value_grad(prob, u)
+    return u, Z, float(np.sqrt(max(f, 0)))
+
+
+def symmetric_nmf(Z: np.ndarray, C: int, iters: int = 2000, seed: int = 0, log=log, tag: str = "") -> np.ndarray:
+    """Nonnegative V (B, C) with V V^T ~ Z (entries of Z clipped at 0), multiplicative updates."""
+    rng = np.random.default_rng(seed)
+    Zp = np.clip(Z, 0, None)
+    B = Z.shape[0]
+    # init from the top-C eigenpairs (absolute values) scaled to the right norm
+    lam, E = np.linalg.eigh(Zp)
+    idx = np.argsort(-lam)[:C]
+    V = np.abs(E[:, idx]) * np.sqrt(np.clip(lam[idx], 1e-12, None))[None, :]
+    V += 1e-3 * V.mean() * rng.random(V.shape)
+    beta = 0.5
+    for it in range(iters):
+        ZV = Zp @ V
+        VVtV = V @ (V.T @ V)
+        V = V * (1 - beta + beta * ZV / np.maximum(VVtV, 1e-300))
+        if it % 500 == 0 or it == iters - 1:
+            log(f"  snmf{tag} it {it:5d}: ||Z - VV^T|| / ||Z|| = {np.linalg.norm(Zp - V @ V.T) / np.linalg.norm(Zp):.4e}")
+    return V
