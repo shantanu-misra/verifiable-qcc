@@ -43,7 +43,7 @@ layout. If a generator ever allocates ids sparsely, check the id cap, not just `
 | 2026-10-24 | 225d0487… | `invsqrt_488144_1b46306c.kmx` (488,144.07) | baseline | baseline | 1.6204 | **1.62036** | 392 / 521 |
 | 2026-10-24 | 10c86bf6… | `invsqrt_165584_2d7c9f6e.kmx` (165,583.96) | `dqi_3725395305991_c3edfdbf.kmb` (3.7254e12, 1 failure locally) | baseline | 4.3494 (4.356 if the salted dqi run has 0 failures) | **4.35605** | n/a (top score 18.86345) |
 | 2026-10-24 | (see sidecar 225940Z) | `invsqrt_165584_2d7c9f6e.kmx` (165,583.96) | `dqi_3355430905041_6ea37ae1.kmb` (3.3554e12, 0 failures) | baseline | 4.5037 | **4.50372** | n/a |
-| 2026-10-25 | 66d120a9… | `invsqrt_165584_2d7c9f6e.kmx` (165,583.96) | `dqi_3355430905041_6ea37ae1.kmb` (3.3554e12, 0 failures) | `dfthcsos_2581833307_5ff495ce/` (2.5818e9, own banked QROM + brot-10 refit) | 4.9149 | **4.91494** | see snapshot |
+| 2026-10-25 | 0a41aa6a… | `invsqrt_165584_2d7c9f6e.kmx` (165,583.96) | `dqi_3355430905041_6ea37ae1.kmb` (3.3554e12, 0 failures) | `dfthcsos_2581833307_5ff495ce/` (2.5818e9, own banked QROM + brot-10 refit) | 4.9149 | **4.91494** | ≈633 / 905 |
 
 The second upload scored 4.35605 against a local 4.3494: the difference is exactly the dqi repetition factor going
 from R(1 failure) = 1.1967 to R(0 failures) = 1.1913, i.e. the salted shot stream drew none of the rare j = 3 inputs
@@ -57,3 +57,9 @@ verifier runs every x, so only `HMR`/`R` outcomes depend on the seed).
 median 5.64, #300 4.36, 45 teams at exactly 1.0. The dense band at 5.6–5.7 is the public-notebook portfolio
 (e.g. "Verified portfolio: best public circuit per task" = 5.63791, "QROM + Tower42" = 5.64746), i.e. roughly a
 180× product of ratios available from public circuits alone; the top 50 are above 8 (> 500× product).
+
+## Leaderboard snapshot, 2026-10-25 (public)
+
+905 scored teams. #1 20.48, #10 16.48, #50 11.61, #100 11.29, #200 10.54, median **7.57** (was 5.64 two days
+earlier): the public portfolios keep improving. We sit at 4.91494 with 632 teams above. Matching the public circuits
+of 2026-10-24 on all three tasks (≈ 5.75) would now be below the median; new ideas, not parity, are needed.
