@@ -247,3 +247,54 @@ because syndromes are shared between matrix entries. No candidate clears the rul
 
 Verdict: for BM/EEA decoders the syndromes stay live and Q ≥ 1,723 + scratch. A genuinely smaller Q needs a decoder
 whose state is the error list rather than (S, σ, B) — not a variant of BM — and we have no such algorithm.
+
+## 8. Toffolis at fixed Q (round 5, 2026-10-25): candidates against Q′²T′ < 2.82e12
+
+v13 per BM step (forward): discrepancy 1,016 (≈ 20 products), update 1,064, erase_nu 616 (inverse 125, 6 products
+306, B-slot copies 72, ν selection 36, three zero tests 66, flags ≈ 10), cswap 262, division 127 (inverse 79 + product
+51), L/flag bookkeeping ≈ 40. Reverse: the same without the discrepancy. Sweep per position 91: zero test 12 (11 + 1),
+gated tower inverse 79 (GF(64) product 17, GF(8) tower 27 incl. 3-Toffoli gate, two GF(64) products 34).
+
+| candidate | ΔT (both passes) | ΔQ | verdict |
+|---|---|---|---|
+| division-free step by storing B pre-scaled (B/b, so ν = d and b ≡ 1) | −130/step but the lc re-scaling B ← C_old/d costs L products (+1,064/step) | 0 | reject |
+| two row operations instead of cswap + division (C ⊕= d·X, then X ⊕= lc·d⁻¹·C: b stays 1 forever, no swap) | +1,064 −262 −51 −125 = +626/step | −12 | reject |
+| inversionless (riBM) update C ← b·C ⊕ d·x^m B | in-place scaling of ≈ L slots: +2 products per slot | 0 | reject |
+| cache 1/B[0] (and 1/C[0]) to drop the recursion's inverse | −125/step but needs 1/ν per lc (+79) and 2 extra registers | +24 | reject (Q² +2.6 % > T gain) |
+| only j ≤ 1 branches, ν₂ parked in one junk register | −200/step, +12 qubits, ≈ 10 shots with two j=2 events fail | +12 | reject (R +3 %) |
+| tighter static bounds (+1/+2 instead of +2/+3) | −14k | 0 | reject: ≈ 1e-4 of shots (two mid-run zeros) would fail, R +3 % |
+| Karatsuba short product for ω | −38k | needs the 35 outputs in separate registers: +420 | reject |
+| **2-bit saturating shift counter m instead of zero tests of A1[0..2]** (f0 = lc, f1 = ¬lc∧m=1, f2 = ¬lc∧m=2; lc erased by m = 1; no wrap flag) | ≈ −90/step → −12.6k | +2 | **accept** |
+| **GF(8) inverse as x²·x⁴ (one 6-Toffoli product of linear images) instead of kickmix's 7** | −1 per inverse: −4.4k | 0 | **accept** (marginal) |
+| cheaper 12-bit zero test than 11 + 1 | none known | — | — |
+| sharing products across sweep positions | none: each position's σ′ is an unrelated field element | — | — |
+
+Where the public BM is cheaper (≈ 120k over both passes): their step has no quotient erasure and roughly half our
+swap; we have not found a formulation without the ν erasure for no-length-change steps (the junk is intrinsic:
+after C ⊕= ν x^m B the old C is gone and ν is only recoverable from (C, B) by the power-series recursion).
+Built as v14 (the shift counter was dropped: its reset at a length change is irreversible, so the lc erasure reuses the
+recursion's zero flag and gate instead, −29/step; leaf GF(2³) inverse as N²·N⁴ with N⁴ kept as the 3-qubit scaffold,
+−1 per inverse): 810,176 static Toffolis, Q 1,856 — **full PASS: score 3.3243e12 (7.35×), T 810,085.9, 0/0** —
+`runs/dqi_3324250406015_ee5f2540_full.json`.
+
+### 8b. Formulations without a per-step quotient erasure (round 6, 2026-10-25) — none clears the rule
+
+The junk is intrinsic to a no-length-change step: C ← C ⊕ ν x^m B destroys C_old, and ν is then a function of
+(C_new, B) only through the power-series quotient (the recursion). Every alternative either moves the junk or pays
+for it elsewhere:
+
+| formulation | per-step effect vs v14 | ΔQ | verdict |
+|---|---|---|---|
+| keep ν as junk during the division, erase the whole quotient at the next length change (depth-δ recursion once per division) | the recursion is still present in every step (static circuit): no change | 0 | reject |
+| skip slot m in the update and carry the term ν·B[0] implicitly (one extra product per discrepancy), materialise at the next lc | δ = 2 support needs two junk registers and the depth-2 recursion anyway: ≈ 626 vs 606 | +12..+24 | reject |
+| erase ν₁ by a depth-1 recursion at j = 1 and ν₂ by a depth-2 one at j = 2 (separate machinery) | both run every step: 269 + 606 | 0 | reject |
+| implicit C = X ⊕ Q(x)·C_old during a division (discrepancies of X and of C_old kept, no C update) | needs disc(C_old, ·) at δ+1 positions and the materialisation of both C′ and C″ at the lc: ≈ 6L vs 4L+24 products per two steps | 0 | reject |
+| two row operations at the lc so that C stays unscaled (C₀ = 1, b ≡ 1) and the recursion needs no inverse | second row op = L products (+1,064), −262 cswap −51 −116 | −12 | reject (+635/step) |
+| store κ = 1/B[0] once per division (recursion inverse-free) | κ must be erased at the next lc: another inverse of a quantum-indexed slot | +12 | reject |
+| make B[0] equal to b so one inverse serves division and recursion | impossible: B[0]/b = 1/d_true is scale-invariant | — | reject |
+| avoid δ = 2 divisions (the j = 2 branch costs ≈ 200/step) by splitting a late length change | not an algebraic identity of BM; zero discrepancies are data | — | reject |
+| cheaper selections (rotate A1[0..4] by j instead of controlled copies) | 120 CSWAP vs 72 copies | 0 | reject |
+
+Conclusion: within scaled-BM with a physically shifted B, the per-step erasure (inverse + 6 products + selections,
+≈ 600 Toffolis) is minimal for j ≤ 2 support, and the public circuit's cheaper BM step must rest on a bookkeeping we
+have not identified. T work on the BM passes stops here; v14 stands.

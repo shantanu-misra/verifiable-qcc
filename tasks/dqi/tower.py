@@ -109,10 +109,38 @@ class Tower:
                 if self.nusq[r][i]:
                     b.cx(bb[i], N[r])
 
+    def _leaf_inv_init(self, b, N):
+        """(inv, t): inv = N^-1 in GF(2^3) as N^2 * N^4 (one 6-Toffoli product). N is left holding N^2 and the
+        3-qubit scaffold t holds N^4 until `_leaf_inv_del` (uncompute is then free)."""
+        g = self.g
+        sq = [[(g.square(1 << i) >> r) & 1 for i in range(3)] for r in range(3)]
+        inv = b.alloc_qubits(3); t = b.alloc_qubits(3)
+        apply_gf2_matrix(b, sq, N)          # N -> N^2
+        b.cx(N, t)                          # t = N^2
+        apply_gf2_matrix(b, sq, t)          # t = N^4
+        self._mul(b, N, t, inv)             # inv = N^6 = N^-1
+        return inv, t
+
+    def _leaf_inv_del(self, b, N, inv, t):
+        g = self.g
+        sq = [[(g.square(1 << i) >> r) & 1 for i in range(3)] for r in range(3)]
+        b.del_gf2_mul(N, t, target=inv, field=g)
+        apply_gf2_matrix(b, gf2_matrix_inverse(sq), t)
+        b.cx(N, t)                          # t = 0
+        apply_gf2_matrix(b, gf2_matrix_inverse(sq), N)   # N restored
+        b.free(t); b.free(inv)
+
     def _sub_inv_init(self, b, N, gate=None):
         """(Ninv, scaffold) for the subfield; with `gate`, Ninv = gate * N^-1 (gating is pushed to the smallest field)."""
         if self.sub is not None:
             return self.sub.init_inverse_with_scaffold(b, N, gate=gate)
+        if self.k == 3:
+            inv, t = self._leaf_inv_init(b, N)
+            if gate is None:
+                return inv, (('leaf', t), None, None)
+            g_inv = b.alloc_qubits(3)
+            b.ccx(gate, inv, g_inv)
+            return g_inv, (('leaf', t), inv, gate)
         inv, sc = b.init_gf2_inverse_with_scaffold(N, field=self.g)
         if gate is None:
             return inv, (sc, None, None)
@@ -127,7 +155,10 @@ class Tower:
             sc0, inv, gate = sc
             if inv is not None:
                 b.del_and(gate, inv, Ninv); b.free(Ninv); Ninv = inv
-            b.del_gf2_inverse_with_scaffold(N, target=Ninv, scaffold=sc0, field=self.g); b.free(sc0); b.free(Ninv)
+            if isinstance(sc0, tuple) and sc0[0] == 'leaf':
+                self._leaf_inv_del(b, N, Ninv, sc0[1])
+            else:
+                b.del_gf2_inverse_with_scaffold(N, target=Ninv, scaffold=sc0, field=self.g); b.free(sc0); b.free(Ninv)
 
     def init_inverse_with_scaffold(self, b: km.CircuitBuilder, x, *, target=None, gate=None):
         """target := x^-1 (0 -> 0), or gate * x^-1 when a control qubit `gate` is given (k Toffolis extra).
