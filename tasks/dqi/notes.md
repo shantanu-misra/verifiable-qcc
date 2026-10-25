@@ -298,3 +298,31 @@ for it elsewhere:
 Conclusion: within scaled-BM with a physically shifted B, the per-step erasure (inverse + 6 products + selections,
 ≈ 600 Toffolis) is minimal for j ≤ 2 support, and the public circuit's cheaper BM step must rest on a bookkeeping we
 have not identified. T work on the BM passes stops here; v14 stands.
+
+## 9. In-place continued-fraction decoder (round 7, 2026-10-25)
+
+Credits: the in-place J-fraction chart is due to SomeJoint / Agniv Banerjee (public Apache-2.0 notebook "Quantum
+Circuits 8.95 LB cost breakdown"); gap pointers, paired extraction and lifetime scheduling to Phuc Thai, ViberTeam /
+Artem Nazemtsev and Ahmed Berat Özer; the classical mask projection to manwithacat. We read the rendered public
+notebooks and wrote our own model and circuit from the algorithm (no code copied).
+
+Algorithm (model_cf.py). f(x) = Σ S_{i+1} x^i. Level: pivot c = f[0] (gap order r if f starts at x^r), divide the
+remaining words by c, invert the unit series in place, read A = 1 + a_1 x (+ … for a gap) and continue on the words
+after A: f = x^r c / (A + x^{r+2} g). 35 ordinary levels turn the 70 syndrome words into 35 (c, a) pairs **in place**.
+Convergents: q′ = A q + x^{r+2} p, p′ = x^r c q, bottom-up and also in place (old q cells become p′, old p cells
+become q′, (c, a) become (p′₀, q′₁)); then q = σ (q₀ = 1), p = ω, and the Forney sweep is unchanged. Everything is
+reversed afterwards. The unit-series inverse is the Frobenius chain a ← a·a^(d) for d = 2, 4, 16 (exponent
+1 → 3 → 15 → 255 ≡ −1 mod x^70): a[k] ^= a[i]^d · a[k − d i] with k descending, each term a product of two still-
+unmodified cells (a[i]^d is a free linear twist).
+
+Model results: 0 mismatches of (p, q) against BM's (σ, ω) on 512 shots (20,480 running); first-order gaps (zero
+pivot ⇔ BM zero discrepancy) in ≈ 0.8 % of shots, higher orders not seen yet. Gaps need pointer bookkeeping (public:
+two 6-bit pointers, exact for ≤ 2 first-order gaps, third gap approximated at ≈ 8e-8/shot).
+
+One-way product counts (ordinary chart): reciprocal chain 21,450 naive, scaling 1,225 (one product + free erase per
+word), conversion 1,785; inversions 70. Estimates against Q′²T′ < 2.79e12 (v14):
+- naive shears: T ≈ 2 × 24,460 × 51 + 140 × 79 + 4,095 × 90 ≈ 2.87 M at Q ≈ 920 → 2.4e12 (−13 %).
+- Karatsuba on the cross blocks (≈ 2× fewer reciprocal products): T ≈ 1.7 M → ≈ 1.4e12 (−48 %).
+- evaluation-rank blocks as in the public design (≈ 4.8k reciprocal products): T ≈ 1.3 M → ≈ 1.1e12.
+Build order: scaling kernel → Frobenius-chain reciprocal (naive, then blocked) → conversion → gap flags → Forney on
+(p, q) → full decoder.
