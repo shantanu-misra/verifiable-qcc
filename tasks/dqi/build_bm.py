@@ -277,10 +277,15 @@ class BMDecoder:
         b.x(z1); b.del_and(g, z1, f1); b.x(z1); b.del_and(z0, nw, g)
         b.x(z0); b.del_and(z0, nw, f0); b.x(z0)
         b.free(km.array([f0, f1, f2, g, h]))
+        self.is_zero(A1[2], z2); self.is_zero(A1[1], z1)
+        b.free(km.array([z1, z2]))
+        return z0, nw, cond                     # kept for the caller's lc erasure; released by `recursion_close`
+
+    def recursion_close(self, n: int, wrap, z0, nw, cond):
+        b = self.b
         b.x(cond); b.x(wrap); b.del_and(cond, wrap, nw); b.x(wrap); b.x(cond); b.free(nw)
         b.flip_if_less_than(self.Lreg, n // 2 + 1, target=cond); b.free(cond)
-        self.is_zero(A1[2], z2); self.is_zero(A1[1], z1); self.is_zero(A1[0], z0)
-        b.free(km.array([z0, z1, z2]))
+        self.is_zero(self.A1[0], z0); b.free(z0)
 
     def wrap_flag(self, n: int, wrap):
         """wrap = (L <= n - t): A1 may have wrapped around; then d = 0 and nothing is erased."""
@@ -313,13 +318,11 @@ class BMDecoder:
             wrap = b.alloc_qubits(1)[0]
             self.wrap_flag(n, wrap)
             with b.mark('erase_nu'):
-                self.quotient_recursion(n, nu, wrap)
+                z0, nw, cond = self.quotient_recursion(n, nu, wrap)
             b.free(nu)
-            # erase lc: lc ^= (A1[0] != 0) & ~wrap
-            z = b.alloc_qubits(1)[0]
-            self.is_zero(self.A1[0], z); b.x(z)
-            b.x(wrap); b.ccx(z, wrap, lc); b.x(wrap)
-            b.x(z); self.is_zero(self.A1[0], z); b.free(z)
+            # erase lc: lc ^= (A1[0] != 0) & (2L > n) & ~wrap   (reuses the recursion's z0 and nw)
+            b.x(z0); b.ccx(z0, nw, lc); b.x(z0)
+            self.recursion_close(n, wrap, z0, nw, cond)
             b.free(lc)
             self.wrap_flag(n, wrap)
             b.free(wrap)
@@ -335,13 +338,11 @@ class BMDecoder:
             wrap = b.alloc_qubits(1)[0]
             self.wrap_flag(n, wrap)
             lc = b.alloc_qubits(1)[0]
-            z = b.alloc_qubits(1)[0]
-            self.is_zero(self.A1[0], z); b.x(z)
-            b.x(wrap); b.ccx(z, wrap, lc); b.x(wrap)
-            b.x(z); self.is_zero(self.A1[0], z); b.free(z)
             nu = b.alloc_qubits(self.deg)
             with b.mark('erase_nu'):
-                self.quotient_recursion(n, nu, wrap)
+                z0, nw, cond = self.quotient_recursion(n, nu, wrap)
+            b.x(z0); b.ccx(z0, nw, lc); b.x(z0)
+            self.recursion_close(n, wrap, z0, nw, cond)
             self.wrap_flag(n, wrap)
             b.free(wrap)
             self.update_L(n, lc)

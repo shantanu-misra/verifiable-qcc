@@ -272,4 +272,7 @@ gated tower inverse 79 (GF(64) product 17, GF(8) tower 27 incl. 3-Toffoli gate, 
 Where the public BM is cheaper (≈ 120k over both passes): their step has no quotient erasure and roughly half our
 swap; we have not found a formulation without the ν erasure for no-length-change steps (the junk is intrinsic:
 after C ⊕= ν x^m B the old C is gone and ν is only recoverable from (C, B) by the power-series recursion).
-Expected after the two accepted items: T ≈ 800k at Q 1,858 → Q²T ≈ 2.76e12 (−2 %).
+Built as v14 (the shift counter was dropped: its reset at a length change is irreversible, so the lc erasure reuses the
+recursion's zero flag and gate instead, −29/step; leaf GF(2³) inverse as N²·N⁴ with N⁴ kept as the 3-qubit scaffold,
+−1 per inverse): 810,176 static Toffolis, Q 1,856 — **full PASS: score 3.3243e12 (7.35×), T 810,085.9, 0/0** —
+`runs/dqi_3324250406015_ee5f2540_full.json`.
