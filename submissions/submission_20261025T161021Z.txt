@@ -1,0 +1,9 @@
+created_utc: 2026-10-25T16:10:26Z
+zip: submissions/submission.zip  sha256: 0a41aa6aad5f818ff73df39bada0d355533eb2167455daa361465da20f482016
+invsqrt: circuits/invsqrt/invsqrt_165584_2d7c9f6e.kmx  sha256: 9ae830a19dec57964b6fc1f14255f1c2728ba26ca3cac5d3707d3c1c178b4729
+dqi:     circuits/dqi/dqi_3355430905041_6ea37ae1.kmb  sha256: 6ea37ae1f7be26f21dbdcdb24ec82df1f0937c25c90b3b56f63e8d3972ea92d0
+dfthcsos: circuits/dfthcsos/dfthcsos_2581833307_5ff495ce  sha256(angle_k_*,submission.npz): 3eeeacebbb72ffa3086540e8478b423c873d6dfae84841da22a68cc13b1cd087
+kaggle_public_score: 4.91494  (uploaded 2026-10-25; local prediction 4.9149)
+local_expected_score: 4.9149  (invsqrt 2076774.23/165583.96 = 12.542x, dqi 24439463583672.93/3355430905041.27 = 7.284x, dfthcsos 3355599588.32/2581833307.18 = 1.300x)
+verifier_runs: runs/invsqrt_165584_2d7c9f6e_full.json, runs/dqi_3355430905041_6ea37ae1_full.json (0 failures), runs/dfthcsos_2581833307_5ff495ce_full.json (lambda_eff 49.023, E_gap 3.9181, T 76997, Q 684)
+metric_only_checks: one file per task, angle_k_0..14 gapless, all registers named, largest id 2048, npz float32/int64 little-endian npy 1.0 — checked 2026-10-25
