@@ -57,7 +57,9 @@ class Adder:
     def __init__(self, b: km.CircuitBuilder, top_reuse: bool = True, spare=()):
         self.b, self.top_reuse, self.spare = b, top_reuse, list(spare)
 
-    def add(self, operand, target, cin=None, subtract: bool = False) -> None:
+    def add(self, operand, target, cin=None, subtract: bool = False, cuccaro: int = 0) -> None:
+        """target += operand + cin. `cuccaro` = number of low positions done with in-place MAJ/UMA
+        (Cuccaro): 2 Toffolis per such position instead of 1, but no carry ancilla for it."""
         b = self.b
         a, t = list(operand), list(target)
         n, m = len(t), len(a)
@@ -66,13 +68,44 @@ class Adder:
             return
         if subtract:
             b.x(km.array(t))
+        k = max(0, min(cuccaro, m, n - 2))
+        if k:
+            own = cin is None
+            c0 = cin if cin is not None else (self.spare[0] if self.spare else b.alloc_qubits(1)[0])
+            own = own and not self.spare
+            saved_spare = self.spare
+            if c0 in saved_spare:
+                self.spare = [q for q in saved_spare if q != c0]   # c0 is busy: not a carry ancilla now
+            cs = [c0] + a[:k]                       # cs[i] = c_i, held in a[i-1] for i >= 1
+            for i in range(k):
+                ci, ti, ai = cs[i], t[i], a[i]
+                b.cx(ai, ti)
+                b.cx(ai, ci)
+                b.ccx(ci, ti, ai)                   # ai <- MAJ(ai, ti, ci)
+            self._gidney(a[k:], t[k:], a[k - 1], subtract=False)
+            self.spare = saved_spare
+            for i in reversed(range(k)):
+                ci, ti, ai = cs[i], t[i], a[i]
+                b.ccx(ci, ti, ai)
+                b.cx(ai, ci)
+                b.cx(ci, ti)                        # ti <- sum bit, ai and ci restored
+            if own:
+                b.free(c0)
+        else:
+            self._gidney(a, t, cin, subtract=False)
+        if subtract:
+            b.x(km.array(t))
+
+    def _gidney(self, a: list, t: list, cin, subtract: bool) -> None:
+        b = self.b
+        n, m = len(t), len(a)
+        if n == 0:
+            return
         if n == 1:
             if m:
                 b.cx(a[0], t[0])
             if cin is not None:
                 b.cx(cin, t[0])
-            if subtract:
-                b.x(km.array(t))
             return
         carry: list = [cin] + [None] * (n - 1)   # carry[i] = c_i (None = identically zero)
         fresh: list = []
@@ -105,6 +138,7 @@ class Adder:
                 b.cx(ci, t[i])
                 and_op(ai, t[i], out)
                 b.cx(ci, out)
+                b.cx(ci, ai)                        # restore the operand bit at once (repeated operand qubits are then safe)
             else:
                 and_op(ci, t[i], out)
         if m == n:
@@ -124,8 +158,9 @@ class Adder:
             elif ai is not None:
                 if uncompute:
                     b.cx(ci, carry[i + 1])
+                    b.cx(ci, ai)
                     b.del_and(ai, t[i], carry[i + 1])
-                b.cx(ci, ai)
+                    b.cx(ci, ai)
                 b.cx(ai, t[i])
             else:
                 if uncompute:
@@ -133,8 +168,6 @@ class Adder:
                 b.cx(ci, t[i])
         for q in reversed(fresh):
             b.free(q)
-        if subtract:
-            b.x(km.array(t))
 
 
 def and_chain_into(b, controls, target) -> None:
@@ -265,6 +298,93 @@ def phase_word(b, cfg: ms.Config, sbits, reg, low_exp: int, temp_moves: bool, id
             b.free(ext)
 
 
+def phase_word_fused(b, sbits, reg, low_exp: int, temp_moves: bool, ids=None, tag='') -> None:
+    """Same phase as phase_word, with the shift-by-4 and shift-by-8 stages fused into the phasing.
+
+    s = f1 + 2 f2 + 4 f4 + 8 f8 <= 10, so f4 and f8 are never both set. After the in-place shifts by 1
+    and 2 (word W of len(reg) + 3 qubits), the bit at output position j is
+        Z_j = W_j ^ f4 (W_j ^ W_{j-4}) ^ f8 (W_j ^ W_{j-8})        (missing W's are 0),
+    computed into one temp with <= 2 Toffolis, phased, and erased by HMR whose kickback (-1)^{m Z_j}
+    is undone by Clifford phases on the same terms. Needs 3 ext qubits instead of 10."""
+    with b.mark('phase_fused' + tag):
+        ext = ids.alloc(3, 'ext' + tag) if ids else b.alloc_qubits(3)
+        word = km.array(list(reg) + list(ext))
+        shift_word(b, sbits[:2], word, len(reg), False, temp_moves)
+        hi = len(word) - 1
+        z = ids.alloc(1, 'z' + tag)[0] if ids else b.alloc_qubits(1)[0]
+
+        def term(f, j, k, act) -> bool:
+            qa = word[j] if j <= hi else None
+            qb = word[j - k] if 0 <= j - k <= hi else None
+            if qa is None and qb is None:
+                return False
+            if qa is not None and qb is not None:
+                b.cx(qb, qa)
+                act(f, qa)
+                b.cx(qb, qa)
+            else:
+                act(f, qa if qa is not None else qb)
+            return True
+
+        for j in range(len(reg) + ms.N_P):
+            e = low_exp + j
+            if e >= 0:
+                continue
+            has = j <= hi
+            if has:
+                b.cx(word[j], z)
+            t4 = term(sbits[2], j, 4, lambda f, q: b.ccx(f, q, z))
+            t8 = term(sbits[3], j, 8, lambda f, q: b.ccx(f, q, z))
+            if not (has or t4 or t8):
+                continue
+            b.z_pow(z, Fraction(2) ** (e + 1))
+            m = b.alloc_bits(1)[0]
+            b.hmr(z, m)
+            b.push_condition(m)
+            if has:
+                b.z(word[j])
+            term(sbits[2], j, 4, lambda f, q: b.cz(f, q))
+            term(sbits[3], j, 8, lambda f, q: b.cz(f, q))
+            b.pop_condition()
+            b.free(m)
+        if ids:
+            ids.free('z' + tag, km.array([z]))
+        else:
+            b.free(z)
+        shift_word(b, sbits[:2], word, len(reg), True, temp_moves)
+        if ids:
+            ids.free('ext' + tag, ext)
+        else:
+            b.free(ext)
+
+
+class _Tracked:
+    """Forwards every call to the CircuitBuilder and samples num_allocated_qubits afterwards."""
+
+    def __init__(self, b):
+        object.__setattr__(self, '_b', b)
+        object.__setattr__(self, 'peak', 0)
+        object.__setattr__(self, 'peak_at', '')
+        object.__setattr__(self, 'label', '')
+
+    def __getattr__(self, name):
+        attr = getattr(self._b, name)
+        if not callable(attr):
+            return attr
+
+        def call(*a, **k):
+            r = attr(*a, **k)
+            n = self._b.num_allocated_qubits
+            if n > self.peak:
+                object.__setattr__(self, 'peak', n)
+                object.__setattr__(self, 'peak_at', self.label)
+            return r
+        return call
+
+    def __setattr__(self, name, value):
+        object.__setattr__(self, name, value)
+
+
 class _Ids:
     """Allocation tracker (asserts live registers never share ids; records peak)."""
 
@@ -285,6 +405,10 @@ class _Ids:
         assert self.live.pop(name) == [q.id for q in arr]
         self.b.free(arr)
 
+    def free_one(self, name, q):
+        self.live[name].remove(q.id)
+        self.b.free(km.array([q]))
+
 
 class Built:
     def __init__(self, circuit, cfg, tables, lay, ids):
@@ -304,8 +428,12 @@ def load(path: str):
 
 
 def build(cfg: ms.Config, tables: dict, lay: dict, *, top_carry=True, borrow=True, temp_moves=True,
-          hmr_flags=True) -> Built:
-    b = km.CircuitBuilder()
+          hmr_flags=True, window: int = -1, window_w: int = 12, cuccaro: int = 0, fuse: bool = False,
+          px21: bool = False) -> Built:
+    """`window` >= 0: outer rows for digits 0..window add into L[:window_w] ++ a 2-qubit signed guard,
+    folded into L[window_w:] once (sign-extended add); `cuccaro`: in-place-MAJ prefix length on the
+    full-width outer rows (saves that many carry qubits for as many Toffolis); `fuse`: fused phasing."""
+    b = _Tracked(km.CircuitBuilder())
     ids = _Ids(b)
     x = b.create_quantum_register(ms.WIDTH, name='x')
     ids.live['x'] = [q.id for q in x]
@@ -315,12 +443,24 @@ def build(cfg: ms.Config, tables: dict, lay: dict, *, top_carry=True, borrow=Tru
     borrow = borrow and binary  # x[21] is 1 after binary normalisation only
 
     # --- normalise -------------------------------------------------------------------------
+    px21 = px21 and binary
+    if px21:
+        borrow = False                              # x[21] will hold the parity flag instead
     if binary:
-        f = ids.alloc(5, 'flags')
+        f = list(ids.alloc(5, 'flags'))
         with b.mark('normalise'):
             normalise_binary(b, x, f)
         sbits = [f[1], f[2], f[3], f[4]]          # s = lz >> 1
-        address = km.array(list(x[DB_LO:ms.WIDTH - 1]) + [f[0]])
+        if px21:
+            # x[21] == 1 after normalisation: park the parity flag there and release f0.
+            b.cx(f[0], x[ms.WIDTH - 1])
+            b.x(x[ms.WIDTH - 1])
+            b.cx(x[ms.WIDTH - 1], f[0])
+            ids.free_one('flags', f[0])
+            parity = x[ms.WIDTH - 1]
+        else:
+            parity = f[0]
+        address = km.array(list(x[DB_LO:ms.WIDTH - 1]) + [parity])
     else:
         f = ids.alloc(ms.N_P, 'flags')
         with b.mark('normalise'):
@@ -363,6 +503,7 @@ def build(cfg: ms.Config, tables: dict, lay: dict, *, top_carry=True, borrow=Tru
     def target_for(names):
         return km.array([q for name, reg in fields if name in names for q in reg])
     all_names = [n for n, _ in fields]
+    b.label = 'lookup'
     with b.mark('lookup'):
         b.init_lookup(table=table_for(all_names), address=address, target=target_for(all_names))
 
@@ -373,8 +514,11 @@ def build(cfg: ms.Config, tables: dict, lay: dict, *, top_carry=True, borrow=Tru
     adder = Adder(b, top_reuse=top_carry, spare=spare)
 
     # --- static high word: phase and erase before the arithmetic ---------------------------
+    pw = (lambda reg, lo, tag: phase_word_fused(b, sbits, reg, lo, temp_moves, ids, tag)) if fuse \
+        else (lambda reg, lo, tag: phase_word(b, cfg, sbits, reg, lo, temp_moves, ids, tag))
     if split:
-        phase_word(b, cfg, sbits, high, cfg.S - cfg.FY - cfg.SB, temp_moves, ids, '_high')
+        b.label = 'phase_high'
+        pw(high, cfg.S - cfg.FY - cfg.SB, '_high')
         with b.mark('erase_high'):
             b.del_lookup(table=table_for(['H']), address=address, target=high)
         ids.free('H', high)
@@ -400,21 +544,54 @@ def build(cfg: ms.Config, tables: dict, lay: dict, *, top_carry=True, borrow=Tru
             with b.mark('merge'):
                 adder.add(resid[cfg.RB - 1:], coarse, None, subtract=inverse)
 
-    def outer_rows(inverse: bool):
-        with b.mark('outer_rows'):
-            order = range(ms.DB) if inverse else reversed(range(ms.DB))
-            for i in order:
-                sh = cfg.sh1(i)
-                assert 0 <= sh < len(rreg), (i, sh)
-                b.cx(digits[i], low)
-                adder.add(rreg[sh:], low, rreg[sh - 1] if sh >= 1 else None, subtract=inverse)
-                b.cx(digits[i], low)
+    guard = [None]
 
+    def outer_row(i: int, inverse: bool, target, k: int):
+        sh = cfg.sh1(i)
+        assert 0 <= sh < len(rreg), (i, sh)
+        assert len(rreg) - sh <= len(target), ('operand wider than window', i)
+        b.cx(digits[i], target)
+        adder.add(rreg[sh:], target, rreg[sh - 1] if sh >= 1 else None, subtract=inverse, cuccaro=k)
+        b.cx(digits[i], target)
+
+    def outer_rows(inverse: bool):
+        b.label = 'outer_rows'
+        with b.mark('outer_rows'):
+            wide = [i for i in range(ms.DB) if i > window]
+            narrow = [i for i in range(ms.DB) if i <= window]
+            if window < 0:
+                for i in (wide if inverse else reversed(wide)):
+                    outer_row(i, inverse, low, cuccaro)
+                return
+            win = km.array(list(low[:window_w]) + list(guard[0]))
+            high_part = low[window_w:]
+            fold_operand = [guard[0][0]] + [guard[0][1]] * (len(high_part) - 1)   # sign-extended 2-bit guard
+            if not inverse:
+                for i in reversed(narrow):
+                    outer_row(i, False, win, 0)
+                with b.mark('fold'):
+                    adder.add(fold_operand, high_part, None)
+                for i in reversed(wide):
+                    outer_row(i, False, low, cuccaro)
+            else:
+                for i in wide:
+                    outer_row(i, True, low, cuccaro)
+                with b.mark('fold'):
+                    adder.add(fold_operand, high_part, None, subtract=True)
+                for i in narrow:
+                    outer_row(i, True, win, 0)
+
+    b.label = 'inner_rows'
     inner_rows(False)
     merge(False)
+    if window >= 0:
+        guard[0] = ids.alloc(2, 'guard')
     outer_rows(False)
-    phase_word(b, cfg, sbits, low[cfg.GY:], cfg.GY - cfg.FY - cfg.SB, temp_moves, ids, '_low')
+    b.label = 'phase_low'
+    pw(low[cfg.GY:], cfg.GY - cfg.FY - cfg.SB, '_low')
     outer_rows(True)
+    if window >= 0:
+        ids.free('guard', guard[0])
     merge(True)
     inner_rows(True)
 
@@ -428,14 +605,26 @@ def build(cfg: ms.Config, tables: dict, lay: dict, *, top_carry=True, borrow=Tru
         if name != 'H':
             ids.free(alloc_name[name], reg)
     if binary:
+        if px21:
+            f0 = ids.alloc(1, 'f0')[0]
+            b.cx(x[ms.WIDTH - 1], f0)
+            b.cx(f0, x[ms.WIDTH - 1])
+            b.x(x[ms.WIDTH - 1])                  # back to the constant 1
+            f = [f0] + f[1:]
         with b.mark('unnormalise'):
             unnormalise_binary(b, x, f, hmr_flags)
+        if px21:
+            ids.free('f0', km.array([f0]))
+            ids.free('flags', km.array(f[1:]))
+        else:
+            ids.free('flags', km.array(f))
     else:
         _flags_to_binary(b, True, f)
         with b.mark('unnormalise'):
             nr._normalize(b, True, x, f)
-    ids.free('flags', f)
+        ids.free('flags', f)
     assert ids.live.keys() == {'x'}, ids.live
+    ids.peak_alloc, ids.peak_at = b.peak, b.peak_at
     return Built(b.finish_circuit(), cfg, tables, lay, ids)
 
 
@@ -491,14 +680,20 @@ def main() -> None:
     ap.add_argument('--no-borrow', action='store_true')
     ap.add_argument('--no-temp-moves', action='store_true')
     ap.add_argument('--no-hmr-flags', action='store_true')
+    ap.add_argument('--window', type=int, default=-1, help='outer rows for digits 0..N use a narrow window + 2-qubit guard')
+    ap.add_argument('--window-w', type=int, default=12)
+    ap.add_argument('--cuccaro', type=int, default=0, help='in-place MAJ prefix length on full-width outer rows')
+    ap.add_argument('--fuse', action='store_true', help='fuse the shift-by-4/8 stages into the phasing (3 ext qubits)')
+    ap.add_argument('--px21', action='store_true', help='park the parity flag in x[21] (frees one flag qubit; disables --borrow)')
     args = ap.parse_args()
     cfg, tables, lay = load(args.table)
     built = build(cfg, tables, lay, top_carry=not args.no_top_carry, borrow=not args.no_borrow,
-                  temp_moves=not args.no_temp_moves, hmr_flags=not args.no_hmr_flags)
+                  temp_moves=not args.no_temp_moves, hmr_flags=not args.no_hmr_flags,
+                  window=args.window, window_w=args.window_w, cuccaro=args.cuccaro, fuse=args.fuse, px21=args.px21)
     c = built.circuit
     st = c.operation_statistics()
     print(f'{cfg.name()}: num_qubits={c.num_qubits} toffoli_like(static)={st.num_toffoli_like} t_like={st.num_t_like} '
-          f'rotations={st.num_z_pow(min_clifford_hierarchy_level=4)} ops={len(c)} peak_live={built.ids.peak} '
+          f'rotations={st.num_z_pow(min_clifford_hierarchy_level=4)} ops={len(c)} peak_alloc={built.ids.peak_alloc}@{built.ids.peak_at} '
           f'(static counts, not a score)')
     if args.check:
         check_against_model(built)

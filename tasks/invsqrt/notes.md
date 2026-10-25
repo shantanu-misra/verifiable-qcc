@@ -433,3 +433,61 @@ static 1,476 → 1,471 Toffolis. The design has few constant wires; the pass is 
 |---|---|---|---|---|---|---|
 | M4 (§10) | 165,583.96 | 93 | 1,465.0 | 1,780.47 | 44 / 2.783e-13 | 0.9100, 1,019,970 |
 | **M4 + exact pass** `invsqrt_165119_067d5ce5` | **165,119.05** | 93 | 1,460.0 (static 1,471) | 1,775.47 | 44 / 2.783e-13 | 0.9100, 1,019,970 |
+
+### Step 2 — windowed outer rows, fused phasing, parity in x[21], Cuccaro prefix (`build_sd.py` options)
+
+* **Windowed outer rows** (`--window 6 --window-w 12`, idea: auqib92's nested windows). The seven low-magnitude
+  outer rows (digits 0–6, operands 5–11 bits) add into L[0:12] ++ a 2-qubit signed guard (a 14-bit two's-complement
+  window, 13 Toffolis per row instead of 20); the guard is folded into L[12:21] once by a sign-extended add
+  (8 Toffolis). The model checks per x that the window never overflows ([−2^13, 2^13)); W = 12 is minimal for
+  digits 0–6, and a second group (digits 7–9 at W = 15) would save 9 more Toffolis per direction for 2 more
+  guard qubits — not worth it. −41 Toffolis per direction, +2 qubits (the guard lives until its inverse fold).
+* **Fused phasing** (`--fuse`): shifts by 1 and 2 stay in place on reg ++ 3 clean qubits; because s ≤ 10 the
+  shift-by-4 and shift-by-8 flags are never both set, so the bit at output position j is
+  W_j ⊕ f4·(W_j ⊕ W_{j−4}) ⊕ f8·(W_j ⊕ W_{j−8}), computed into one temp with ≤ 2 Toffolis, phased, and erased by
+  HMR with a Clifford fix-up of the same three terms. −26 static Toffolis and 7 fewer ext qubits per word
+  (high-word phase peak 93 → 87).
+* **Parity in x[21]** (`--px21`): after normalisation x[21] ≡ 1, so the parity flag is parked there (3 CNOTs) and
+  its qubit released; the address reads x[21]. This replaces the borrowed carry wire (same qubit), but it also
+  lowers the lookup/erase peak, which is now the binding one: 74 base + 8 H + 8 QROM workspace = 90–91.
+* **Cuccaro prefix** (`--cuccaro k`): the first k positions of each full-width outer-row adder use in-place
+  MAJ/UMA (2 Toffolis per position, no carry ancilla), the rest the Gidney chain. Trades k Toffolis per row for
+  k carry qubits; useful only down to the lookup/erase floor. Static optimum of this family: k = 4 → Q 92,
+  1,424 static Toffolis; k = 5 → Q 91 / 1,438; k = 3 → Q 93 / 1,410.
+* The adder restores each operand bit immediately after its carry (two extra CNOTs), so operands may repeat a
+  qubit (needed for the sign-extended fold).
+
+Static count comparison (same coefficient table, before the exact pass; executed ≈ static − 11):
+
+| options | Q | static Toffolis |
+|---|---|---|
+| M4 (none) | 93 | 1,476 |
+| `--window 6` | 95 | 1,394 |
+| `--fuse` | 93 | 1,450 |
+| `--window 6 --fuse` | 95 | 1,368 |
+| `--window 6 --fuse --cuccaro 3` | 93 | 1,410 |
+| `--window 6 --fuse --px21 --cuccaro 4` (+ exact pass → 1,419) | **92** | **1,424** |
+| `--window 6 --fuse --px21 --cuccaro 5` | 91 | 1,438 |
+
+### Step 3 — LP calibration of the rotation angles (`tasks/invsqrt/calib_sd.py`): measured, not adopted
+
+Cutting-plane LP over the 44 rotation angles (integers in 2^-64 turns; Z, S and T positions kept exact) maximising
+the smallest absolute margin, which sets the synthesis eps. On the M4 table: margin 7.19e7 → 1.19e8 units
+(×1.65), rotation T 1,260.9 → 1,243.0, i.e. **−4.5 Toffoli-equivalents (0.25 %)**; dropping even the lowest
+rotation cannot be compensated (worst 1.016 after re-optimisation). Our error budget (0.91 of tol) is too tight
+for this lever; it would pay only with a looser fit (more FY bits), which costs more than it saves. Not built.
+
+### Verified result of step 2
+
+| circuit | score | Q | Toffolis (executed) | C | rotations / eps | worst err/tol, x |
+|---|---|---|---|---|---|---|
+| step 1 `invsqrt_165119_067d5ce5` | 165,119.05 | 93 | 1,460.0 | 1,775.47 | 44 / 2.783e-13 | 0.9100, 1,019,970 |
+| **step 2 `invsqrt_158560_c0910790`** (`--window 6 --fuse --px21 --cuccaro 4` + exact pass) | **158,559.55** | **92** | **1,408.0** (static 1,419) | **1,723.47** | 44 / 2.783e-13 | 0.9100, 1,019,970 |
+
+13.10× below the baseline (−4.0 % vs step 1). Build: `python tasks/invsqrt/build_sd.py out.kmx --table
+sd_tables/sd_binary_F29_F119_FY28_GY2_drop5_L21S20_RB12.json --window 6 --fuse --px21 --cuccaro 4`, then
+`python tasks/invsqrt/exact_pass.py out.kmx final.kmx --table <same>`. The public frontier (138,095 at Q 82 /
+1,365; 148,978 at Q 92 / 1,304) is still 1.07–1.15× ahead: at equal Q our Toffoli count is ≈ 100 higher, and the
+public 82-qubit variant's generator is unpublished. Remaining levers we have not built: our own merged
+measurement-based unlookup (would remove the H-erase workspace peak, ≈ −3 Q), a second window group (−9
+Toffolis/direction, +2 Q), shared prefix flags (−6).
