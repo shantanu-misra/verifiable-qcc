@@ -82,6 +82,15 @@ def prune_columns(w: np.ndarray, W: np.ndarray, C_new: int):
     return w2, W2
 
 
+def normalise_state(uu: np.ndarray, w: np.ndarray):
+    """Unit rows with the norms absorbed into the weights: s(u u^T) = |u|^2 s(n n^T), so w_bc -> w_bc |u_b|^2."""
+    R, B, C = w.shape
+    norms = np.linalg.norm(uu.reshape(R * B, N), axis=1)
+    u = (uu.reshape(R * B, N) / norms[:, None]).reshape(R, B, N)
+    w = w * (norms ** 2).reshape(R, B, 1)
+    return u, w
+
+
 def make_problem(ref, base, u, w, W, egap_target: float, a_gap: float) -> tf.THCProblem:
     R, B, C = w.shape
     fac = dt.Factorization(w=w, W=W, S=base.S, beta_1=base.beta_1, edges=base.edges, U=u, H1_I=base.H1_I,
@@ -132,8 +141,7 @@ def main() -> None:
                                        maxiter=args.w_first, tag=f"[{w.shape} w,W]")
     uu, w, W, r = tf.lbfgs_joint_u(prob, uu, w, W, opt_u=True, opt_w=True, opt_W=True, mu=args.mu,
                                    maxiter=args.iters, tag=f"[{w.shape}]")
-    u = uu / np.linalg.norm(uu, axis=1, keepdims=True)
-    u = u.reshape(w.shape[0], w.shape[1], N)
+    u, w = normalise_state(uu, w)
     r = report(prob, u, w, W, f"final {w.shape}")
     np.savez(args.out, u=u, w=w, W=W, theta=dt.decompose(u.reshape(-1, N), base.edges),
              metrics=np.array([r["error_2"], r["E_gap"], r["Lambda"], r["lambda_eff"]]))

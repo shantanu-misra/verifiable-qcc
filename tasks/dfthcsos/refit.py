@@ -160,6 +160,10 @@ class Problem:
         """negmass that gives E_gap = e_gap (E_gap = E_UPPER - esos_const + 2 negmass)."""
         return 0.5 * (e_gap - (dt.E_UPPER - self.esos_const))
 
+    def extra_dM(self, out: dict):
+        """Hook: additional dL/dM (R*C, NPAIR) from subclass loss terms, or None."""
+        return None
+
     def forward_backward(self, theta_q: np.ndarray, w: np.ndarray, alpha: float = 0.0, mu: float = 0.0,
                          need_grad: bool = True) -> dict:
         """Loss and gradients at quantised angles theta_q (theta/pi, (R*B, N-1)) and weights w.
@@ -205,6 +209,9 @@ class Problem:
         if alpha_lin:
             Pneg = V[:, neg] @ V[:, neg].T
             dM += alpha_lin * np.einsum("rc,s->rcs", self.Wmat, self.sym.of_matrix(Pneg)).reshape(self.R * self.C, NPAIR)
+        extra = self.extra_dM(out)  # subclasses add loss terms that act through M (one adjoint pass)
+        if extra is not None:
+            dM += extra
         dMr = dM.reshape(self.R, self.C, NPAIR)
         dw = np.matmul(Usr, dMr.transpose(0, 2, 1))
         if mu:

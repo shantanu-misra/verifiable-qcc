@@ -68,6 +68,16 @@ class THCProblem(rf.Problem):
             r["dw"] = r["dw"].reshape(w_shape)
         return self._extra_terms(r, r["u"], w, w_shape, mu, need_grad, W, theta_q=theta_q)
 
+    def extra_dM(self, out):
+        if not self.a_gap or not np.isfinite(out["E_gap"]):
+            return None
+        dgap = out["E_gap"] - self.egap_target
+        a_lin = 2.0 * self.a_gap * dgap * 2.0  # dL/dE_gap * dE_gap/dnegmass
+        lam, V = out["lam"], out["V"]
+        neg = lam < 0
+        sP = self.sym.of_matrix(V[:, neg] @ V[:, neg].T)
+        return a_lin * np.einsum("rc,s->rcs", self.Wmat, sP).reshape(self.R * self.C, NPAIR)
+
     def _extra_terms(self, r, u, w, w_shape, mu, need_grad, W, theta_q):
         if self.a_gap:
             dgap = r["E_gap"] - self.egap_target
@@ -82,23 +92,10 @@ class THCProblem(rf.Problem):
         sP = self.sym.of_matrix(V[:, neg] @ V[:, neg].T)  # s(P_neg)
         dnm_dW = np.einsum("rcs,s->rc", M, sP)  # d negmass / d W_rc = <P_neg, X_rc>
         dW = np.zeros_like(Wm)
-        a_lin = 0.0
         if self.a_gap:
             dgap = r["E_gap"] - self.egap_target
             coef = 2.0 * self.a_gap * dgap  # dL/dE_gap
-            a_lin += coef * 2.0  # E_gap = ... + 2 negmass
-            dW += coef * (Wm + 2.0 * dnm_dW)
-        if a_lin:
-            r["dM_extra"] = a_lin * np.einsum("rc,s->rcs", Wm, sP).reshape(self.R * self.C, NPAIR)
-            dMr = r["dM_extra"].reshape(self.R, self.C, NPAIR)
-            Usr = r["Us"].reshape(self.R, self.B, NPAIR)
-            r["dw"] = r["dw"] + np.matmul(Usr, dMr.transpose(0, 2, 1)).reshape(w_shape)
-            dUs = np.matmul(w, dMr).reshape(self.R * self.B, NPAIR)
-            du = self.sym.grad_outer(dUs, u)
-            r["du"] = r["du"] + du
-            if theta_q is not None:
-                _, cache = rf.givens_forward(theta_q, self.edges)
-                r["dtheta"] = r["dtheta"] + rf.givens_backward(du, cache, self.edges)
+            dW += coef * (Wm + 2.0 * dnm_dW)  # the negmass part through M is in extra_dM
         if mu:
             wB = Wm + w.sum(axis=1)
             tot = np.abs(w).sum(axis=1) + np.abs(wB)

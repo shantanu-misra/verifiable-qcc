@@ -268,3 +268,8 @@ group's 60 dyads are a near-basis for its own columns), against 57 mHa for dropp
 points) measured by the training session: ~5x gentler per removed point. Switched to **group dropping** with long
 joint refits (u, w, W; E_gap target 3.918; `prune.py --R`): 65 -> 60 -> 55 -> ... -> 26, groups ranked by their
 contribution ||sum_c X_rc (x) X_rc||_F, 1,500 L-BFGS iterations per stage (~15 min at R 60).
+Implementation notes: the joint fit works on unnormalised point rows (the dyad scale is absorbed), so a saved state must
+renormalise the rows and multiply w_bc by |u_b|^2 (`prune.normalise_state`; a first run stored unscaled weights and
+mis-reported 383 -> 646 mHa). The E_gap term's gradient through negmass now enters the single adjoint pass
+(`Problem.extra_dM` hook): 0.37 s per loss+gradient at (65, 60, 60), 1.5x faster. Within-group pruning after 400
+joint iterations: B 48 383 mHa, B 40 703, B 32 1,114 (confirms it is the wrong lever).
