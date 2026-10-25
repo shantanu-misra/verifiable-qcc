@@ -326,3 +326,18 @@ word), conversion 1,785; inversions 70. Estimates against Q′²T′ < 2.79e12 (
 - evaluation-rank blocks as in the public design (≈ 4.8k reciprocal products): T ≈ 1.3 M → ≈ 1.1e12.
 Build order: scaling kernel → Frobenius-chain reciprocal (naive, then blocked) → conversion → gap flags → Forney on
 (p, q) → full decoder.
+
+### 9b. Kernels verified on toy fields (build_cf.py)
+
+Extraction (in place, round trip restores), conversion ((P, Q) match the model) and the full decoder are exact on
+GF(2⁴)/GF(2⁶) toy instances except on gap inputs (zero pivot with a nonzero tail): phase errors occur only there.
+A term a[i]^d·a[i] (k = (d+1)i) needs a temporary copy because the multiplier takes two registers.
+
+Gap design (first order, own formulation). A gap level f = x·c/(1 + a₁x + x²h), h = a₂ + x·g, is the *ordinary* level
+applied to f/x followed by ordinary levels on h — so no "skip" slot is needed: detect g = [w₀ = 0 ∧ w₁ ≠ 0] (two zero
+tests), rotate the active window left by one (controlled CSWAP chain, 12·(n−1)), run the ordinary level, and keep a
+2-bit count s of borrowed zero cells now sitting at the end of the window. Scaling leaves those zeros zero by itself;
+the reciprocal's updates of the top s cells are routed through a delta register and applied only when the cell is
+real ([k < n − s], 12 Toffolis per d-pass per protected cell), delta erased by measurement. Conversion treats each
+shifted level as p′ = x·c·q (one extra coefficient, taken from the borrowed zero by a controlled rotation). Second-
+order gaps (w₀ = w₁ = 0, w₂ ≠ 0, ≈ 2e-6/shot) stay approximate, as in the public design.
