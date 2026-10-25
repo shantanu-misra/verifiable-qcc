@@ -33,12 +33,17 @@ if ON_KAGGLE:
     for top in sorted(os.listdir("/kaggle/input")):
         p = os.path.join("/kaggle/input", top)
         print("input:", p, sorted(os.listdir(p))[:12] if os.path.isdir(p) else "")
-    fcidump = _find("FeMoCo76o113e.fcidump")
+    # the verifier package (scoreinfra/dfthc_math.py + the FCIDUMP next to it) lives in the competition data;
+    # the starter-kit dataset also ships the FCIDUMP, so key on the package, not the file
+    dm_path = _find("dfthc_math.py")
     sample = _find("angle_k_0.kmb") or _find("angle_k_0.kmx")
-    print("found fcidump:", fcidump, " sample:", sample)
-    if fcidump is None or sample is None:
+    print("found dfthc_math:", dm_path, " sample:", sample)
+    if dm_path is None or sample is None:
         raise SystemExit("competition data not found under /kaggle/input")
-    os.environ["VQCC_VERIFIER_DIR"] = os.path.dirname(fcidump)
+    verifier_dir = os.path.dirname(os.path.dirname(dm_path))
+    if not os.path.exists(os.path.join(verifier_dir, "FeMoCo76o113e.fcidump")):
+        raise SystemExit(f"no FCIDUMP in {verifier_dir}")
+    os.environ["VQCC_VERIFIER_DIR"] = verifier_dir
     os.environ["VQCC_SAMPLE_DIR"] = os.path.dirname(sample)
     os.environ.setdefault("VQCC_DATA", "/kaggle/input/google-verifiable-quantum-circuit-compilation")
     os.environ.setdefault("VQCC_BUILD", "/tmp/vqcc_build")
