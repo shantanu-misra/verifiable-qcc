@@ -298,3 +298,136 @@ for it elsewhere:
 Conclusion: within scaled-BM with a physically shifted B, the per-step erasure (inverse + 6 products + selections,
 ≈ 600 Toffolis) is minimal for j ≤ 2 support, and the public circuit's cheaper BM step must rest on a bookkeeping we
 have not identified. T work on the BM passes stops here; v14 stands.
+
+## 9. In-place continued-fraction decoder (round 7, 2026-10-25)
+
+Credits: the in-place J-fraction chart is due to SomeJoint / Agniv Banerjee (public Apache-2.0 notebook "Quantum
+Circuits 8.95 LB cost breakdown"); gap pointers, paired extraction and lifetime scheduling to Phuc Thai, ViberTeam /
+Artem Nazemtsev and Ahmed Berat Özer; the classical mask projection to manwithacat. We read the rendered public
+notebooks and wrote our own model and circuit from the algorithm (no code copied).
+
+Algorithm (model_cf.py). f(x) = Σ S_{i+1} x^i. Level: pivot c = f[0] (gap order r if f starts at x^r), divide the
+remaining words by c, invert the unit series in place, read A = 1 + a_1 x (+ … for a gap) and continue on the words
+after A: f = x^r c / (A + x^{r+2} g). 35 ordinary levels turn the 70 syndrome words into 35 (c, a) pairs **in place**.
+Convergents: q′ = A q + x^{r+2} p, p′ = x^r c q, bottom-up and also in place (old q cells become p′, old p cells
+become q′, (c, a) become (p′₀, q′₁)); then q = σ (q₀ = 1), p = ω, and the Forney sweep is unchanged. Everything is
+reversed afterwards. The unit-series inverse is the Frobenius chain a ← a·a^(d) for d = 2, 4, 16 (exponent
+1 → 3 → 15 → 255 ≡ −1 mod x^70): a[k] ^= a[i]^d · a[k − d i] with k descending, each term a product of two still-
+unmodified cells (a[i]^d is a free linear twist).
+
+Model results: 0 mismatches of (p, q) against BM's (σ, ω) on 512 shots (20,480 running); first-order gaps (zero
+pivot ⇔ BM zero discrepancy) in ≈ 0.8 % of shots, higher orders not seen yet. Gaps need pointer bookkeeping (public:
+two 6-bit pointers, exact for ≤ 2 first-order gaps, third gap approximated at ≈ 8e-8/shot).
+
+One-way product counts (ordinary chart): reciprocal chain 21,450 naive, scaling 1,225 (one product + free erase per
+word), conversion 1,785; inversions 70. Estimates against Q′²T′ < 2.79e12 (v14):
+- naive shears: T ≈ 2 × 24,460 × 51 + 140 × 79 + 4,095 × 90 ≈ 2.87 M at Q ≈ 920 → 2.4e12 (−13 %).
+- Karatsuba on the cross blocks (≈ 2× fewer reciprocal products): T ≈ 1.7 M → ≈ 1.4e12 (−48 %).
+- evaluation-rank blocks as in the public design (≈ 4.8k reciprocal products): T ≈ 1.3 M → ≈ 1.1e12.
+Build order: scaling kernel → Frobenius-chain reciprocal (naive, then blocked) → conversion → gap flags → Forney on
+(p, q) → full decoder.
+
+### 9b. Kernels verified on toy fields (build_cf.py)
+
+Extraction (in place, round trip restores), conversion ((P, Q) match the model) and the full decoder are exact on
+GF(2⁴)/GF(2⁶) toy instances except on gap inputs (zero pivot with a nonzero tail): phase errors occur only there.
+A term a[i]^d·a[i] (k = (d+1)i) needs a temporary copy because the multiplier takes two registers.
+
+Gap design (first order, own formulation). A gap level f = x·c/(1 + a₁x + x²h), h = a₂ + x·g, is the *ordinary* level
+applied to f/x followed by ordinary levels on h — so no "skip" slot is needed: detect g = [w₀ = 0 ∧ w₁ ≠ 0] (two zero
+tests), rotate the active window left by one (controlled CSWAP chain, 12·(n−1)), run the ordinary level, and keep a
+2-bit count s of borrowed zero cells now sitting at the end of the window. Scaling leaves those zeros zero by itself;
+the reciprocal's updates of the top s cells are routed through a delta register and applied only when the cell is
+real ([k < n − s], 12 Toffolis per d-pass per protected cell), delta erased by measurement. Conversion treats each
+shifted level as p′ = x·c·q (one extra coefficient, taken from the borrowed zero by a controlled rotation). Second-
+order gaps (w₀ = w₁ = 0, w₂ ≠ 0, ≈ 2e-6/shot) stay approximate, as in the public design.
+
+### 9c. Gap handling as built (one first-order gap, pointer + rotation)
+
+Full-scale ordinary chart (no gap handling, `dqi_cf1`): smoke run 2,560 shots → 0 value errors, 12 phase errors (all
+gap shots), Q 921, T ≈ 2.82 M (statistics; not a score). Model facts (20,480 verifier shots, `model_cf_gaps.py`):
+weight histogram peaks at 31–32, weight 35 is 2.7 %; gap shots 0.70 % (one gap 0.70 %, two gaps 0.01 %).
+
+Design (the "plain" scheme, exact for weight ≤ 34): at level k, g = [w₀ = 0 ∧ w₁ ≠ 0 ∧ no gap yet]; if g, rotate the
+window left by one (the zero goes to cell 69, which stays a protected zero) and write k+1 into a 6-qubit pointer; g is
+erased by recomputing [ptr = k+1]. The ordinary level then runs on f/x; the reciprocal's writes to the last cell are
+gated by F = [ptr = 0] (product into a temporary, 12 CCX, free erase), scaling a zero cell is harmless. Conversion is
+the ordinary arithmetic; at the gap level P' = x·cQ is realised by rotating the P cell list right by one (controlled
+on [ptr = k+1]); the spare top cell of Q supplies the zero. The pointer is freed after the reverse extraction.
+Cell model `model_cf_gaps.py --cells`: exact on all shots except weight 35 with a gap (3 of 4 such shots: the J-fraction
+of f/x needs 71 coefficients) and two-gap shots; expected ≈ 20–25 failures per 102,400 → R ≈ 1.25–1.27.
+Toy circuits (GF(2⁴) n=8, GF(2⁶) n=12): cells+pointer match the model on 384 shots; full decode has phase errors only
+on model-wrong inputs (6/256 and 0/128), 0 value errors.
+
+Verifier failure table (N = 102,400, Clopper–Pearson at 2⁻¹²⁸): failures 0→R 1.1913, 1→1.1967, 5→1.2131, 10→1.229,
+20→1.2548, 25→1.2659, 50→1.3134. So the weight-35 gap shots (≈19 per run) cost ≈ 5 % — worth an exact gap level
+(A of degree 2, second rotation parking a₂, ≈ 100 k Toffolis) only while T ≳ 2.5 M.
+
+**v15 = `dqi_3042909973384_df7d3863.kmb` (build_cf.py, gaps on): full PASS, score 3.0429e12 (8.03×), Q 927,
+T 2,888,132.43, 0 value / 9 phase failures (ε⁺ 1.16e-3, R 1.2261)** — `runs/dqi_3042909973384_df7d3863_full.json`.
+−8.5 % vs v14 with the naive reciprocal chain; the T budget is now the shears (≈ 2.2 M of 2.89 M), then the sweep (0.37 M).
+Q profile (live_profile on m=63): sweep/forney_step peaks at 927, extraction 903, conversion 902, base 858 = 840 cells +
+6 pointer + 12 for the constant-one register of A2[0] (removable: fold q₀ = 1 into the sweep's sums).
+
+## 10. Round 8 estimates (v15 → rank-reduced shears), before building
+
+**Where the 2,888,222 static Toffolis sit** (analyzer on the m=63 build, sweep scaled ×65; `build/dqi_cf2_m63.kmx`):
+
+| phase | per direction | both | of which |
+|---|---|---|---|
+| extraction (35 levels) | 1,188,368 | 2,376,736 | reciprocal chain 21,450 products × 51 = 1,094 k; scaling 1,225 × 51 = 62 k; gated end-cell writes ≈ 12 k; rotations 14.7 k CSWAP; inverses + flags ≈ 6 k |
+| conversion | 71,468 | 142,936 | 1,190 products × 51 = 61 k; P-list rotations 7.1 k CSWAP; inverses 4 k |
+| sweep (4,095 positions) | — | 368,550 | ≈ 90 per position (tower inverse 78, zero test 11, …) |
+
+So the shears are 76 % of T. Everything else is 0.51 M.
+
+**Shear reduction (modelled in `build/shear_count.py`, checked algorithm in `build/tmvp_eval.py`).** Pass d of the
+Frobenius chain is a ← a·(1 + Σ_i a_i^d x^{di}) mod x^L, i.e. d independent unit-triangular Toeplitz products, one per
+residue class mod d. In place, a class vector of n cells is updated by the recursion Tri(n) = TMVP(⌊n/2⌋×⌈n/2⌉) +
+Tri(⌈n/2⌉) + Tri(⌊n/2⌋) (hi part first, reading the untouched lo part; hi/lo of the whole window first, then recurse into
+lo, so all coefficients a_i, i < L/d, are read before they change). A dense p×q Toeplitz block costs p+q−1 GF(4096)
+products by evaluation/interpolation (transposed Toom–Cook: y = E_pᵀ((Iᵀt) ⊙ (E_q rev v)), numerically verified for
+sizes up to 35×34); every linear part (GF(4096) constants, Frobenius of the operand sums, output fan-out) is CX-only,
+so a block needs three scratch cells (operand sums X, Y, product Z erased for free by `del_gf2_mul`). Tri(n) comes out
+at ≈ n log₂n − n (balanced split is optimal under this recurrence; the short-product rank 2n−3 is out of reach in place).
+
+| strategy | products one way | shear Toffolis both ways (51/product) | T estimate |
+|---|---|---|---|
+| naive (v15) | 21,450 | 2,188 k | 2,888 k |
+| Karatsuba blocks (0/1 constants) | 11,744 | 1,198 k | 1,898 k |
+| evaluation-rank blocks | 8,564 | 874 k | **≈ 1,574 k** |
+| + 42-Toffoli multiplier on all 10,979 products/way | 8,564 | 719 k | ≈ 1,380 k |
+
+Per level L = 70 the three passes (d = 2, 4, 16) go from 1,156 / 561 / 116 to 289 / 222 / 95 products. Q: X, Y, Z replace
+tmp + gtmp, so the extraction peak moves 903 → ≈ 915, still under the sweep's 927 — no Q change. Circuit size: the
+constants cost ≈ 6–9 k CX per product, ≈ +100 M ops (≈ 200 M total, ~1.8 GB .kmb); v15's full run took 2 min 50 s (bit-sliced batches), so runtime is no concern; the build was ≈ 10 min.
+Estimated cost at Q 927, T 1.57 M, R 1.226: 1.66e12 (14.7×); with R 1.191 and the 42-multiplier ≈ 1.41e12 (17.3×).
+Break-even rule R′Q′²T′ < 3.043e12 is cleared by a factor ≈ 1.9.
+
+**Kernel status (built after the estimate).** `tmvp_block` / `tri_block` / `pass_fast` in build_cf.py (constants from
+`tmvp.py`); the hi/lo split must be ⌈L/2⌉ so every coefficient a_i, i ≤ (L−1)/d, stays in the untouched lo half, and
+within a block the triangular part is applied to the old values before the hi += T·lo accumulation. Checks: reciprocal
+alone exact for n = 2..12 (GF(2⁶)) and n = 35, 69 (GF(2¹²)); full window n = 69: 30,804 Toffolis vs 93,483 naive (×3.03);
+toy decoders GF(2⁴) n=8 / GF(2⁶) n=12 unchanged (phase errors only on model-wrong inputs, 0 value errors).
+
+**v16 = `dqi_1666385650802_08243c62.kmb` (build_cf.py, fast shears + one-gap handling): full PASS, score 1.6664e12
+(14.67×), Q 927, T 1,589,677.71, 0 value / 7 phase failures (R 1.2199)** — `runs/dqi_1666385650802_08243c62_full.json`.
+−45 % vs v15; static count 1,589,768 (estimate 1,574 k); 92.4 M ops / 860 MB (no growth: fewer products' internal CX
+offset the constants); smoke 2,560 shots 0/0. Remaining T: shears ≈ 0.87 M, sweep 0.37 M, scaling + conversion 0.25 M,
+gap handling + inverses ≈ 0.1 M.
+
+**Failure classes (cell model of the v15/v16 circuit, 102,400 sampled shots, seed 7, `model_cf_gaps.py … cells`):**
+no gap 101,650 ok; one first-order gap: weight 35 → 33 wrong / 1 ok, weight ≤ 34 → 4 wrong / 710 ok; two gaps 2 (both ok).
+So ≈ 37 model-wrong shots per run, of which about half give the right phase by chance — consistent with the 9 and 7
+phase failures observed. Handling the second gap buys nothing; the exact weight-35 gap level (A of degree 2, ≈ +100 k
+Toffolis = +6 %) would recover ≈ 2.3 % of R: not worth it at T ≈ 1.6 M.
+
+**Round-9 levers against R′Q′²T′ < 1.666e12** (R and Q unchanged unless stated):
+
+| lever | estimate | verdict |
+|---|---|---|
+| GF(4096) multiplier 51 → 42: GF(8)⁴ representation, Toom-Cook 4-way with 7 points in GF(8) ∪ {∞}, each point one GF(8) product (rank 6); all basis changes, evaluations and interpolation are GF(2)-linear (free). 42 is the public figure. | 10,979 products/direction × 9 × 2 ≈ −198 k T (−12.5 %) | build first |
+| constant-one register for q₀ in the sweep: accumulate σ(x⁻¹) − 1 into an existing slot and test against 1 | Q 927 → 915 (−2.6 %) | build second |
+| sweep inverse 78 → 66 (norm-based GF(64)² tower, public figure) | −12 × 4,095 ≈ −49 k (−3.1 %) | after the two above |
+| mask projection (−70 sweep positions) | ≈ −6 k (−0.4 %) | later |
+| exact weight-35 gap level | +100 k T for −2.3 % R | no |
