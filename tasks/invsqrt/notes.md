@@ -410,3 +410,26 @@ Results of the queued experiments (model only, 2026-10-24): GY = 3 → max err/t
 residual range exceeds 11 bits; LB = 20 → segment 0's low register overflows. The M4 widths are the floor of this
 design in every direction we tried; only the margin-weighted fit (≈ −13 Toffoli-eq) and the prefix-flag chain (≈ −6)
 remain as sub-percent items.
+
+## 12. Second public round (2026-10-25): exact-domain pass, windows, fused phasing, angle calibration
+
+`docs/public_sota.md` (2026-10-25 section) reports a public invsqrt frontier of 138,095 (Q 82, 1,365 Toffolis,
+binary only) and a full-source variant at 148,978 (Q 92, 1,304). Ideas re-implemented here in our own code,
+credited to **marsyas / Houssem Alayet** (the full-source notebook), **Artem / anazemcev** (exact-domain pass,
+exact compilation), **auqib92** (nested windows), **mizeroluckygall and lightningv08** (angle calibration),
+**Dmitrii Gluzdov** (merged unlookup), **Phuc Thai** and the other authors that notebook names.
+
+### Step 1 — exact-domain post-pass (`tasks/invsqrt/exact_pass.py`), verified
+
+Evaluates every wire over all 3,133,452 legal inputs (bit-packed, 49k words per wire) and rewrites each
+Toffoli-like gate whose action is provably identical on the whole domain: CCX with a constant or duplicated
+control → CX / X / drop, CSWAP with a constant control or always-equal operands → SWAP / CX pair / drop, CCZ
+likewise; a hash of every live wire also catches `a∧b ≡ w` for a third wire w. Measurement fix-ups stay valid
+because they correct the kickback of the *function* the wire holds. Conditioned blocks are evaluated as if they
+execute and asserted value-neutral. On our M4 circuit it found 5 rewrites (3 CCX → CX, 2 CSWAP → CX pair):
+static 1,476 → 1,471 Toffolis. The design has few constant wires; the pass is generic and reusable (dqi too).
+
+| circuit | score | Q | Toffolis (executed) | C | rotations / eps | worst err/tol, x |
+|---|---|---|---|---|---|---|
+| M4 (§10) | 165,583.96 | 93 | 1,465.0 | 1,780.47 | 44 / 2.783e-13 | 0.9100, 1,019,970 |
+| **M4 + exact pass** `invsqrt_165119_067d5ce5` | **165,119.05** | 93 | 1,460.0 (static 1,471) | 1,775.47 | 44 / 2.783e-13 | 0.9100, 1,019,970 |
