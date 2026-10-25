@@ -477,3 +477,8 @@ decoders 0 value errors and phase errors only on model-wrong inputs; full window
 **v19 = `dqi_1035794640819_d89dfa52.kmb` (paired extraction): full PASS, score 1.0358e12 (23.59×), Q 912,
 T 1,015,714.03, 0 value / 9 phase failures (R 1.2261)** — `runs/dqi_1035794640819_d89dfa52_full.json`. −25.7 % vs v18;
 67.5 M ops. T is now at the public band (1.08–1.12 M) and below it.
+
+**v20 = `dqi_1018990736589_a2fc298a.kmb` (Q trims): full PASS, score 1.0190e12 (23.98×), Q 900, T 1,021,222.33,
+0 value / 11 phase failures (R 1.2319)** — `runs/dqi_1018990736589_a2fc298a_full.json`. −1.6 % vs v19: the sweep's
+unused `located` register is gone and the pair kernel uses scaffold-free inverses (+5.5 k Toffolis), so the extraction
+peak (912) dropped under the sweep's 900. Q profile: extraction 900, sweep 900, conversion 899, base 846.

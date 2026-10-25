@@ -424,7 +424,7 @@ class BMDecoder:
         even = [A2[k] for k in range(2, t + 1, 2)]
         acc = A2[0] if A2[0] is not None else even[0]     # A2[0] None: q_0 = 1 is implicit (CF decoder)
         z = b.alloc_qubits(1)[0]
-        located = b.alloc_qubits(self.deg)
+        located = b.alloc_qubits(self.deg) if self.tower is None else None   # only the non-tower path needs it
         is_err = b.alloc_bits(1)
         step = b.mark('forney_step')
         for j in range(self.m):
@@ -480,7 +480,9 @@ class BMDecoder:
             b.gf2_idiv(gf.pow(alpha, (-k * (self.m - 1)) % order), target=A2[k], field=gf)
         for i in range(1, t):
             b.gf2_idiv(gf.pow(alpha, (-i * (self.m - 1)) % order), target=W[i], field=gf)
-        b.free(is_err); b.free(located); b.free(z)
+        b.free(is_err); b.free(z)
+        if located is not None:
+            b.free(located)
 
     def build(self, S, E):
         b = self.b
