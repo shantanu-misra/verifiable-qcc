@@ -17,7 +17,8 @@ Design (our own implementation of the "banked" idea reported on the Kaggle forum
 Usage (inside Docker; writes angle_k_<k>.kmb + submission.npz into OUT_DIR):
     python tasks/dfthcsos/build_qrom.py SUBMISSION.npz OUT_DIR --batch-size 4 [--brot 12] [--check]
 `SUBMISSION.npz` must hold `angle_words` (brot-bit integers, (A, 75)) plus the factorization arrays
-and `tree_edges`; `--brot` defaults to the smallest width that holds every word.  `--check`
+and `tree_edges`; `--brot` defaults to the smallest width that holds every word.  `--banks 1` builds plain
+QROMs (A - 1 Toffolis, n + J brot + n qubits) for tables whose 2W scratch would not fit.  `--check`
 simulates the family with the official verifier's `recover_words_from_circuits` (no salt) and
 compares the recovered words with the table.
 """
@@ -55,7 +56,29 @@ def pack_rows(delta: np.ndarray, brot: int) -> list[int]:
     return [sum(int(delta[a, j]) << (j * brot) for j in range(J)) for a in range(A)]
 
 
-def build_angle_circuit(delta: np.ndarray, brot: int) -> km.Circuit:
+def build_plain_circuit(delta: np.ndarray, brot: int) -> km.Circuit:
+    """Plain QROM: one unary iteration over all A addresses, CX loads (~A - 1 Toffolis, n ancillas).
+    Used when 2W scratch does not fit the 128-qubit cap (J brot > 52), e.g. the small THC tables with J 10."""
+    A, J = delta.shape
+    W = J * brot
+    n = (A - 1).bit_length()
+    rows = pack_rows(delta, brot)
+    b = km.CircuitBuilder()
+    selection = b.create_quantum_register(n, "selection")
+    word_regs = [b.create_quantum_register(brot, f"word_{j}") for j in range(J)]
+    target = [word_regs[j][i] for j in range(J) for i in range(brot)]
+    with b.unary_iteration(selection, range(A)) as it:
+        for a, m in it:
+            v = rows[a]
+            for i in range(W):
+                if (v >> i) & 1:
+                    b.cx(m, target[i])
+    return b.finish_circuit()
+
+
+def build_angle_circuit(delta: np.ndarray, brot: int, banks: int = 2) -> km.Circuit:
+    if banks == 1:
+        return build_plain_circuit(delta, brot)
     A, J = delta.shape
     W = J * brot
     n = (A - 1).bit_length()
@@ -86,8 +109,8 @@ def build_angle_circuit(delta: np.ndarray, brot: int) -> km.Circuit:
     return b.finish_circuit()
 
 
-def build_family(words: np.ndarray, brot: int, batch_size: int) -> list[km.Circuit]:
-    return [build_angle_circuit(d, brot) for d in batch_deltas(words, batch_size)]
+def build_family(words: np.ndarray, brot: int, batch_size: int, banks: int = 2) -> list[km.Circuit]:
+    return [build_angle_circuit(d, brot, banks) for d in batch_deltas(words, batch_size)]
 
 
 def write_family(circuits, out_dir: str, npz_arrays: dict) -> None:
@@ -120,6 +143,7 @@ def main() -> None:
     ap.add_argument("out_dir")
     ap.add_argument("--batch-size", "-J", type=int, required=True)
     ap.add_argument("--brot", type=int, default=None)
+    ap.add_argument("--banks", type=int, default=2, choices=(1, 2), help="2: banked QROM (needs 12 + 2W + 11 qubits); 1: plain")
     ap.add_argument("--check", action="store_true")
     args = ap.parse_args()
 
@@ -129,7 +153,7 @@ def main() -> None:
     brot = args.brot or max(1, int(words.max()).bit_length())
     assert words.min() >= 0 and words.max() < (1 << brot), "words do not fit brot bits"
     t0 = time.time()
-    circuits = build_family(words, brot, args.batch_size)
+    circuits = build_family(words, brot, args.batch_size, args.banks)
     stats = [(c.num_qubits, c.operation_statistics().num_toffoli_like, len(c)) for c in circuits]
     print(f"built {len(circuits)} circuits in {time.time()-t0:.1f}s: qubits {max(s[0] for s in stats)}, "
           f"static Toffolis per circuit {[s[1] for s in stats]}, sum {sum(s[1] for s in stats)} per pass")

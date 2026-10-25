@@ -134,3 +134,73 @@ T and Q would give 2.60e9, so the circuit side is at the public level and the re
   Everything here (circuits, refit pipeline, one-body encoder) carries over unchanged to a new `submission.npz`.
 - Circuit side is near its floor for this shape: ~1,990 (unary iteration over A/2 groups) + W + 88 per circuit; only
   a smaller A (fewer two-body vectors) or wider banks (impossible under the 128-qubit cap for W >= 35) would cut it.
+
+## 7. Retarget (2026-10-25): load fewer vectors
+
+The public frontier (`docs/public_sota.md`, 2026-10-25: 8.09e8, 4.15x, self-reported) does not come from better QROM
+circuitry: it loads 572 vectors (single-group THC R 1 / B 496 / C 384) instead of 3,976. Cost model (verifier
+formula, lambda_eff 47.5 assumed, ANGLES = K x 2 x (A - 1) with one unary-iteration Toffoli per address, circuit
+qubits = selection + J brot + 10 iteration ancillas <= 128):
+
+| shape | A | brot / J | K | T (heuristic) | Q | cost | ratio |
+|---|---|---|---|---|---|---|---|
+| (65,60,45) | 3,976 | 10 / 10 | 8 | 74,608 (11,008) | 734 | 2.60e9 | 1.29 |
+| (24,60,30) | 1,516 | 10 / 10 | 8 | 30,056 (5,816) | 726 | 1.04e9 | 3.24 |
+| (6,144,127) | 940 | 10 / 10 | 8 | 23,546 (8,522) | 793 | 8.87e8 | 3.78 |
+| (1,496,384) | 572 | 10 / 10 | 8 | 20,146 (11,010) | 823 | 7.88e8 | 4.26 |
+| (1,496,384) | 572 | 11 / 9 | 9 | 21,588 (11,310) | 822 | 8.43e8 | 3.98 |
+| (1,496,256) | 572 | 10 / 10 | 8 | 17,930 (8,794) | 822 | 7.00e8 | 4.79 |
+| (1,400,320) | 476 | 10 / 10 | 8 | 16,446 (8,846) | 823 | 6.43e8 | 5.22 |
+| (2,250,200) | 576 | 10 / 10 | 8 | 17,000 (7,800) | 789 | 6.37e8 | 5.27 |
+
+With J = 10 at brot 10 (100 word qubits) only a plain QROM fits in 128 qubits (10 + 100 + 10); the 2-bank trick needs
+2W. T is ~1 Toffoli per address per circuit, so the lever is A = 76 + R B and, through the inner PREPARE, R C.
+
+Accuracy limits of the target T = tei + shift (2,926 x 2,926 in the pair basis, PSD to 3e-4, ||T||_F 12.18 Ha):
+the best rank-k approximation leaves 20 / 15 / 10 / 5 mHa at k = 290 / 307 / 330 / 384, so rank(Z) <= C must be
+>= ~330 with quantisation in mind, and the public C = 384 sits at the 5 mHa rank. The baseline's own 3,900 vectors
+are useless as THC points (random or pivoted-QR subsets of 500-1,200 leave more than 0.5 Ha with Z free): the points
+must be fitted anew. `thc_fit.py`: eigen-dyad initialisation (dyads of the eigenvectors of the dominant
+eigen-matrices of T), exact least-squares Z for fixed points (PSD rank-C truncation -> w), L-BFGS on (theta, w, W)
+with the E_gap target and Lambda terms; ~40 ms per step at (1, 496, 384) natively.
+
+The lambda_eff floor, derived: E_gap = E_UPPER - ecore + eta beta_1 + 0.5 sum_c W_c^2 + 2 negmass = -559.13 + 0.5 sum W^2 +
+2 negmass (the baseline carries 0.5 sum W^2 = 540.5 Ha), so the strict floor forces 0.5 sum W^2 >= 563.05 - 2 negmass.
+With single-signed weight columns, (|W_c + s_c| + ||w_c||_1)^2 >= W_c^2 (equality iff W_c <= -s_c), hence
+Lambda_2 >= 0.25 sum W^2 >= 281.5 - negmass, and Lambda = Lambda_1 + Lambda_2 >= 281.5 + posmass(h1'). At the E_gap floor
+lambda_eff >= sqrt(3.914898 * 559.13) = 46.79: the number the public notebooks quote. Reaching it needs E_gap at the
+floor, h1' with no positive eigenvalues, every weight column of one sign and W_c <= -sum_b w_bc; our gauge-optimised
+baseline-shaped family (Lambda 290) is 3 % above it.
+
+Lookup for the small tables: no ANF compiler is needed. `build_qrom.py --banks 1` (one kickmix unary iteration over all
+A addresses, CX loads) gives, for A = 572 / J 10 / brot 10, 8 circuits of 120 qubits and 574 Toffolis (4,592 per pass,
+9,184 both passes, i.e. the public 20,286 - 11,310 heuristic); A = 476: 476 Toffolis, 118 qubits.
+
+First fits (eigen-dyad init, exact least-squares Z, 3 x 300 L-BFGS iterations on (theta, w) with Z re-solved between
+rounds): B 496 / C 384: 627 -> 376 -> 312 mHa; B 400 / C 320: 798 -> 356 mHa (an earlier "Z free" column here was
+computed with a wrong formula and has been removed; ||T - P T P||^2 = ||T||^2 - ||Q^T T Q||^2). Z* = A T A^T is PSD
+(T is) and its spectrum tail is tiny (rank-320 truncation of the B 400 Z* drops 0.004 in Frobenius), so the points
+are the whole problem; the projection error is the right objective for them (variable projection, `varpro_points`).
+
+Point optimisation: L-BFGS on the Givens angles converges to poor stationary points (B 400: stalled at 198.7 mHa after
+1,500 iterations; B 496: 207 -> 147 after 1,000), because the angle parametrisation is badly conditioned (root angles
+move whole subtrees). Variable projection directly on the point coordinates u (unconstrained: the scale of u_b is
+absorbed by Z, rows renormalised at the end; `varpro_u`) drops the same B 400 state 198.7 -> 142.6 mHa in 100
+evaluations. Starts: dyad ranking 628 mHa at B 496, pivoted-QR "ISDF" on the same candidates 1,245, random 10,387.
+
+Direct-coordinate variable projection: B 400: 198.7 -> 94.1 mHa in 1,500 iterations (then ~0.7 mHa per 100); B 496:
+207 -> 83.9 in 2,000 (~0.5 per 100); greedy growth 120 -> 504 with 60 iterations per step ends worse (158). The
+residual of the B 400 fit is spread over ~120 eigen-directions (top 50 carry 59 of 94 mHa): it is not a few missing
+points. The unregularised least-squares Z is badly conditioned (cond(U) 1,118, Z eigenvalues up to 1,161, trace 3,029
+vs 28.8 for the baseline's weights, 49 point pairs with |cos| > 0.9), which gives Lambda ~ 29,000 (Lambda_2 29,373):
+such a factorisation is useless for the score even if its error were fine.
+
+**Why the public THC recipe penalises D(w).** With tr T = 53.3 Ha fixed (sum_c ||X_c||_F^2 = tr T for any decomposition),
+C ~ 400 columns have ||X_c||_F ~ 0.37, and the E_gap floor fixes sum_c W_c^2 ~ 1,080 (W_rms 1.68). The one-norm
+||w_c||_1 >= ||X_c||_F (equality only for identical same-signed dyads; the baseline's tightness is 4.7), so with
+indefinite columns Lambda_2 ~ 1/4 sum_c (1.7 + 1.68)^2 ~ 1,100 and lambda_eff ~ 95. Only when every column is
+single-signed (X^c PSD) and W_c <= -tr X^c does the term collapse to W_c^2 and Lambda_2 to the 270 floor, whatever
+the weights' size. The baseline does not need this (only 3 % of its 3,900 columns are single-signed, its X^rc are
+fully indefinite) because its columns are tiny (||X||_F 0.046 vs W_rms 0.53); a THC factorisation with ~400 columns
+does. A score-worthy THC fit is therefore a constrained SOS-THC problem: T = sum_c X_c (x) X_c with PSD X_c,
+plus the offsets and the error gate.

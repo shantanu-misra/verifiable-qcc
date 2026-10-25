@@ -166,6 +166,15 @@ class Problem:
 
         alpha weighs negmass linearly, or (negmass - negmass_target)**2 when `negmass_target` is set."""
         u, cache = givens_forward(theta_q, self.edges)
+        out = self.forward_backward_u(u, w, alpha, mu, need_grad)
+        if need_grad:
+            out["dtheta"] = givens_backward(out["du"], cache, self.edges)
+        return out
+
+    def forward_backward_u(self, u: np.ndarray, w: np.ndarray, alpha: float = 0.0, mu: float = 0.0,
+                           need_grad: bool = True) -> dict:
+        """Same loss at point coordinates u (R*B, N) (rows need not be normalised: the verifier normalises;
+        here they are used as given), gradient `du` instead of `dtheta`."""
         Us = self.sym.of_outer(u)  # (R*B, NPAIR)
         Usr = Us.reshape(self.R, self.B, NPAIR)
         M = np.matmul(w.transpose(0, 2, 1), Usr).reshape(self.R * self.C, NPAIR)
@@ -201,9 +210,7 @@ class Problem:
         if mu:
             dw += mu * self.lambda2_grad(w)
         dUs = np.matmul(w, dMr).reshape(self.R * self.B, NPAIR)
-        du = self.sym.grad_outer(dUs, u)
-        dtheta = givens_backward(du, cache, self.edges)
-        out["dtheta"], out["dw"] = dtheta, dw
+        out["du"], out["dw"] = self.sym.grad_outer(dUs, u), dw
         return out
 
 
@@ -254,7 +261,7 @@ def one_body_words(prob: Problem, words2: np.ndarray, w: np.ndarray, brot: int, 
     """Words of the 76 one-body rows for quantised two-body words: eigenvectors of h1' encoded with
     error feedback (or plain rounding, whichever is better), then coordinate descent on
     error_1 = ||sum_j lambda_j v_j v_j^T - h1'||_F (+-1, +-2 moves)."""
-    fac = dt.Factorization(w=w, W=prob.fac.W, S=prob.fac.S, beta_1=prob.fac.beta_1, edges=prob.edges,
+    fac = dt.Factorization(w=w, W=prob.Wmat, S=prob.fac.S, beta_1=prob.fac.beta_1, edges=prob.edges,
                            U=prob.fac.U, H1_I=prob.fac.H1_I, Hsym_lower=prob.fac.Hsym_lower)
     u2 = dt.decode(words2, brot, prob.edges).reshape(prob.R, prob.B, N)
     h1p = dt.h1_prime(prob.ref, fac, u2)
@@ -322,7 +329,7 @@ def exact_eval(prob: Problem, words2: np.ndarray, w: np.ndarray, brot: int, one_
     w32 = np.asarray(np.asarray(w, dtype=np.float32), dtype=np.float64)
     words1, _ = one_body_words(prob, words2, w32, brot, sweeps=one_body_sweeps, verbose=verbose)
     words = np.concatenate([words1, words2], axis=0)
-    fac = dt.Factorization(w=w32, W=prob.fac.W, S=prob.fac.S, beta_1=prob.fac.beta_1, edges=prob.edges,
+    fac = dt.Factorization(w=w32, W=prob.Wmat, S=prob.fac.S, beta_1=prob.fac.beta_1, edges=prob.edges,
                            U=prob.fac.U, H1_I=prob.fac.H1_I, Hsym_lower=prob.fac.Hsym_lower)
     # W is stored through H2_I = W + sum w in float32; mimic that rounding too
     H2_I = np.asarray(np.asarray(fac.W + w32.sum(axis=1), dtype=np.float32), dtype=np.float64)
