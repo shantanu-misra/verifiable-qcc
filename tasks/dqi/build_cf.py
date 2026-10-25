@@ -17,10 +17,11 @@ from tmvp import tmvp_algorithm
 
 
 class CFDecoder(BMDecoder):
-    def __init__(self, builder, n, field, m_positions, gaps=True, fast=True):
+    def __init__(self, builder, n, field, m_positions, gaps=True, fast=True, pairs=True):
         super().__init__(builder, n, field, m_positions)
         self.frob = {}
         self.fast = fast          # rank-reduced shears (notes §10) instead of the naive chain
+        self.pairs = pairs        # two J-fraction levels per reciprocal chain (notes §10, round 9c)
         self._cm, self._alg = {}, {}
         self.gaps = gaps          # handle one first-order gap exactly (pointer + rotation), see notes §9c
         self.ptr = None           # pointer register: 1-based index of the gap level, 0 = none
@@ -331,8 +332,26 @@ class CFDecoder(BMDecoder):
             b.free(gtmp[0])
 
     def extract(self, words, *, reverse: bool = False):
+        if self.pairs:
+            starts = list(range(0, len(words) - 2, 4))             # pairs; a final single level if 2 cells remain
+            single = len(words) - 2 if (len(words) - 2) % 4 == 0 else None
+            if reverse:
+                if single is not None:
+                    self.level(words, single, reverse=True)
+                for start in reversed(starts):
+                    self.pair(words[start:], start // 2, reverse=True)
+            else:
+                for start in starts:
+                    self.pair(words[start:], start // 2, reverse=False)
+                if single is not None:
+                    self.level(words, single, reverse=False)
+            return
         levels = range(0, len(words), 2)
         for start in (reversed(levels) if reverse else levels):
+            self.level(words, start, reverse=reverse)
+
+    def level(self, words, start, *, reverse):
+        if True:
             active = words[start:]
             k = start // 2
             with self.b.mark('cf_level'):
@@ -350,6 +369,149 @@ class CFDecoder(BMDecoder):
                     self.reciprocal(active[1:], gate=F)
                     if self.gaps:
                         self.flag_release(F)
+
+    # ---- paired extraction (notes §10, round 9c) -------------------------------------------------------
+    def inv_open(self, x):
+        """Regularised inverse: (inv, sc, z) with z = [x == 0]; x is forced to 1 while z is set."""
+        b = self.b
+        z = b.alloc_qubits(1)[0]; self.is_zero(x, z); b.cx(z, x[0])
+        inv, sc = self.inverse_init(x)
+        return inv, sc, z
+
+    def inv_close(self, x, inv, sc, z):
+        b = self.b
+        self.inverse_del(x, inv, sc)
+        b.cx(z, x[0]); self.is_zero(x, z); b.free(z)
+
+    def scale1(self, w, factor, undo):
+        """w <- w * factor in place (undo = factor^-1 register, for the free erasure)."""
+        b = self.b
+        tmp = b.alloc_qubits(self.deg)
+        self.xor_prod(w, factor, tmp); b.swap(w, tmp)
+        b.del_gf2_mul(w, undo, target=tmp, field=self.gf); b.free(tmp)
+
+    def acc(self, x, y, target, gate, protected):
+        """target ^= x*y, gated when target is the protected end cell."""
+        b = self.b
+        if gate is not None and target is protected:
+            tmp = b.alloc_qubits(self.deg)
+            self.xor_prod(x, y, tmp); self.gated_xor(gate, tmp, target)
+            b.del_gf2_mul(x, y, target=tmp, field=self.gf); b.free(tmp)
+        else:
+            self.xor_prod(x, y, target)
+
+    def a1_gate(self, zy, F, L):
+        """Control for the '+a1' terms: c' != 0, and (L == 4) W[3] is a real cell."""
+        b = self.b
+        b.x(zy)
+        if L == 4 and F is not None:
+            t = b.alloc_qubits(1)[0]; b.ccx(zy, F, t); return t
+        return zy
+
+    def a1_gate_close(self, ga, zy, F, L):
+        b = self.b
+        if ga is not zy:
+            b.ccx(zy, F, ga); b.free(ga)
+        b.x(zy)
+
+    def pair(self, W, k, *, reverse):
+        """Two levels (k, k+1) on the window W (L >= 4 cells): records (c, a1) in W[0..1], (c', a1') in W[2..3],
+        the next window h'' in W[4:]. Forward steps 1-5 of notes §10 (round 9c); reverse is the exact mirror."""
+        b = self.b
+        L = len(W); prot = W[-1]
+        def step2(gate):                              # w: W[m+2] ^= a1 W[m+1] (m = L-3..1), W[2] ^= a1^2 c
+            for m in range(L - 3, 0, -1):
+                self.acc(W[1], W[m + 1], W[m + 2], gate, prot)
+            X = b.alloc_qubits(self.deg)
+            b.cx(W[1], X); self.frob_inplace(X, 2); self.acc(X, W[0], W[2], gate, prot)
+            self.unfrob_inplace(X, 2); b.cx(W[1], X); b.free(X)
+        def step2_rev(gate):
+            X = b.alloc_qubits(self.deg)
+            b.cx(W[1], X); self.frob_inplace(X, 2); self.acc(X, W[0], W[2], gate, prot)
+            self.unfrob_inplace(X, 2); b.cx(W[1], X); b.free(X)
+            for m in range(1, L - 2):
+                self.acc(W[1], W[m + 1], W[m + 2], gate, prot)
+        def minus_cp(gate):                           # s = r - c' x^2, or - c' x^3 after a level-B rotation (w -> w/x)
+            b.cx(W[2], W[4])
+            if self.gaps:
+                g = b.alloc_qubits(1)[0]; self.eq_const(self.ptr, k + 2, g)
+                for i in range(self.deg):
+                    b.ccx(g, W[2][i], W[4][i])
+                if L == 6:                                # W[5] is the end cell: write only if it is real
+                    t = b.alloc_qubits(1)[0]; b.ccx(g, gate, t)
+                    for i in range(self.deg):
+                        b.ccx(t, W[2][i], W[5][i])
+                    b.ccx(g, gate, t); b.free(t)
+                else:
+                    for i in range(self.deg):
+                        b.ccx(g, W[2][i], W[5][i])
+                self.eq_const(self.ptr, k + 2, g); b.free(g)
+        def step5(gate, rev):                         # q recurrence: W[m] ^= a1 W[m-1], m = 4..L-1 (ascending)
+            if L <= 4:
+                return
+            if not rev:
+                minus_cp(gate)
+                for m in range(4, L):
+                    self.acc(W[1], W[m - 1], W[m], gate, prot)
+            else:
+                for m in range(L - 1, 3, -1):
+                    self.acc(W[1], W[m - 1], W[m], gate, prot)
+                minus_cp(gate)
+        with b.mark('cf_pair'):
+            if not reverse:
+                if self.gaps:
+                    self.gap_enter(W, k)
+                F = self.flag_acquire() if self.gaps else None
+                inv, sc, z = self.inv_open(W[0])
+                self.scale1(W[1], inv, W[0])                              # a1 = f1 / c
+                step2(F)
+                if self.gaps:
+                    self.flag_release(F); self.gap_enter(W[2:], k + 1); F = self.flag_acquire()
+                self.scale1(W[2], inv, W[0])                              # c' = w0 / c
+                self.inv_close(W[0], inv, sc, z)
+                Y = b.alloc_qubits(self.deg); self.xor_prod(W[0], W[2], Y)   # cc = c c'
+                invy, scy, zy = self.inv_open(Y)
+                self.scale1(W[3], invy, Y)                                # w1 / (c c')
+                for m in range(4, L):
+                    self.scale1(W[m], invy, Y)                            # w_m / w0
+                self.inverse_del(Y, invy, scy)
+                ga = self.a1_gate(zy, F, L)
+                self.gated_xor(ga, W[1], W[3])                            # a1' = w1/(cc') + a1   (only if c' != 0 and W[3] real)
+                self.gated_xor(ga, W[1], W[3])                            # window head w1/w0 = a1' + a1
+                self.reciprocal(W[3:], gate=F)                            # w0 / w
+                self.gated_xor(ga, W[1], W[3])                            # back to a1'
+                self.a1_gate_close(ga, zy, F, L)
+                b.cx(zy, Y[0]); self.is_zero(Y, zy); b.free(zy)
+                b.del_gf2_mul(W[0], W[2], target=Y, field=self.gf); b.free(Y)
+                step5(F, False)
+                if self.gaps:
+                    self.flag_release(F)
+            else:
+                F = self.flag_acquire() if self.gaps else None
+                step5(F, True)
+                Y = b.alloc_qubits(self.deg); self.xor_prod(W[0], W[2], Y)
+                zy = b.alloc_qubits(1)[0]; self.is_zero(Y, zy); b.cx(zy, Y[0])
+                ga = self.a1_gate(zy, F, L)
+                self.gated_xor(ga, W[1], W[3])
+                self.reciprocal(W[3:], reverse=True, gate=F)
+                self.gated_xor(ga, W[1], W[3])
+                self.gated_xor(ga, W[1], W[3])
+                self.a1_gate_close(ga, zy, F, L)
+                invy, scy = self.inverse_init(Y)
+                for m in range(L - 1, 3, -1):
+                    self.scale1(W[m], Y, invy)
+                self.scale1(W[3], Y, invy)
+                self.inv_close(Y, invy, scy, zy)
+                b.del_gf2_mul(W[0], W[2], target=Y, field=self.gf); b.free(Y)
+                inv, sc, z = self.inv_open(W[0])
+                self.scale1(W[2], W[0], inv)
+                if self.gaps:
+                    self.flag_release(F); self.gap_leave(W[2:], k + 1); F = self.flag_acquire()
+                step2_rev(F)
+                self.scale1(W[1], W[0], inv)
+                self.inv_close(W[0], inv, sc, z)
+                if self.gaps:
+                    self.flag_release(F); self.gap_leave(W, k)
 
     def convert(self, words, *, reverse: bool = False):
         """Bottom-up in place: for level (c, a) with current (P, Q): Q' = (1 + a x) Q + x^2 P, P' = c Q.
@@ -412,12 +574,12 @@ class CFDecoder(BMDecoder):
             b.free(self.ptr); self.ptr = None
 
 
-def build_circuit(n: int, degree: int, m: int, gaps: bool = True, fast: bool = True) -> km.Circuit:
+def build_circuit(n: int, degree: int, m: int, gaps: bool = True, fast: bool = True, pairs: bool = True) -> km.Circuit:
     gf = km.GF2Field(degree)
     b = km.CircuitBuilder()
     S = [b.create_quantum_register(degree, name=f'S{i}') for i in range(n)]
     E = [b.create_classical_register(degree, name=f'E{j}') for j in range(m)]
-    CFDecoder(b, n, gf, m, gaps=gaps, fast=fast).build(S, E)
+    CFDecoder(b, n, gf, m, gaps=gaps, fast=fast, pairs=pairs).build(S, E)
     return b.finish_circuit()
 
 
@@ -425,9 +587,9 @@ if __name__ == '__main__':
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument('output'); ap.add_argument('--n', type=int, default=70); ap.add_argument('--degree', type=int, default=12)
-    ap.add_argument('--m', type=int, default=4095); ap.add_argument('--no-gaps', action='store_true'); ap.add_argument('--naive', action='store_true')
+    ap.add_argument('--m', type=int, default=4095); ap.add_argument('--no-gaps', action='store_true'); ap.add_argument('--naive', action='store_true'); ap.add_argument('--no-pairs', action='store_true')
     a = ap.parse_args()
-    c = build_circuit(a.n, a.degree, a.m, gaps=not a.no_gaps, fast=not a.naive)
+    c = build_circuit(a.n, a.degree, a.m, gaps=not a.no_gaps, fast=not a.naive, pairs=not a.no_pairs)
     c.to_file(a.output, format='kmb' if a.output.endswith('.kmb') else 'kmx')
     st = c.operation_statistics()
     print(f'wrote {a.output}: toffoli_like={st.num_toffoli_like} num_qubits={c.num_qubits} ops={len(c)}')

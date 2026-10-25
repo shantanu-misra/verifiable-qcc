@@ -465,3 +465,15 @@ inverses (c, then cc') are not held together and both are released before the re
 
 **v18 = `dqi_1393661418529_31bc11f2.kmb` (66-Toffoli tower inverse): full PASS, score 1.3937e12 (17.54×), Q 912,
 T 1,354,166.27, 0 value / 13 phase failures (R 1.2374)** — `runs/dqi_1393661418529_31bc11f2_full.json`. −4.4 % vs v17.
+
+**Built (round 9c): paired extraction** (`CFDecoder.pair`, 17 pairs + one single level). Two gap subtleties found by
+the cell tests: after a level-B rotation (w → w/x) the identity reads x³w̃ = c − (1 + a₁x)f, so the −c' correction
+moves from s₂ to s₃ (controlled on [ptr = k+2], 24 CCX per pair) and must not land on a parked end cell (L = 6);
+and the "+a₁" terms are gated by [cc' ≠ 0 ∧ W[3] real] so a parked W[3] (L = 4 after a gap) keeps a'₁ = 0 like the
+plain scheme. Toy cells+pointer tests (GF(2⁴) n = 8, 12; GF(2⁶) n = 10): every model-right input matches; full toy
+decoders 0 value errors and phase errors only on model-wrong inputs; full window n = 70 extract+convert exact on 8 shots,
+342,050 Toffolis one way, peak 912 qubits.
+
+**v19 = `dqi_1035794640819_d89dfa52.kmb` (paired extraction): full PASS, score 1.0358e12 (23.59×), Q 912,
+T 1,015,714.03, 0 value / 9 phase failures (R 1.2261)** — `runs/dqi_1035794640819_d89dfa52_full.json`. −25.7 % vs v18;
+67.5 M ops. T is now at the public band (1.08–1.12 M) and below it.
