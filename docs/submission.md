@@ -42,6 +42,7 @@ layout. If a generator ever allocates ids sparsely, check the id cap, not just `
 |---|---|---|---|---|---|---|---|
 | 2026-10-24 | 225d0487… | `invsqrt_488144_1b46306c.kmx` (488,144.07) | baseline | baseline | 1.6204 | **1.62036** | 392 / 521 |
 | 2026-10-24 | 10c86bf6… | `invsqrt_165584_2d7c9f6e.kmx` (165,583.96) | `dqi_3725395305991_c3edfdbf.kmb` (3.7254e12, 1 failure locally) | baseline | 4.3494 (4.356 if the salted dqi run has 0 failures) | **4.35605** | n/a (top score 18.86345) |
+| 2026-10-24 | (see sidecar 225940Z) | `invsqrt_165584_2d7c9f6e.kmx` (165,583.96) | `dqi_3355430905041_6ea37ae1.kmb` (3.3554e12, 0 failures) | baseline | 4.5037 | **4.50372** | n/a |
 
 The second upload scored 4.35605 against a local 4.3494: the difference is exactly the dqi repetition factor going
 from R(1 failure) = 1.1967 to R(0 failures) = 1.1913, i.e. the salted shot stream drew none of the rare j = 3 inputs
