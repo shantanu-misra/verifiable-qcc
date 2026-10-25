@@ -110,6 +110,40 @@ class Trainer:
         W = self.W.detach().cpu().numpy()[keep]
         self.set_state(u, w, W)
 
+    def train_stage_lbfgs(self, evals: int, eval_every: int, tag: str, history: int = 30, chunk: int = 100):
+        """Full-batch L-BFGS (strong-Wolfe line search) on the device; `evals` loss evaluations in chunks."""
+        # scale w so that all coordinates are O(0.1-1) for the line search
+        wscale = 0.0025
+        v = (self.w.detach() / wscale).clone().requires_grad_(True)
+        u, W = self.u, self.W
+        opt = torch.optim.LBFGS([u, v, W], lr=1.0, max_iter=chunk, max_eval=int(chunk * 1.25), history_size=history,
+                                tolerance_grad=1e-12, tolerance_change=1e-14, line_search_fn="strong_wolfe")
+        best = None
+        t0 = time.time()
+        done = 0
+        count = {"n": 0}
+
+        def closure():
+            opt.zero_grad(set_to_none=True)
+            self.w = v * wscale
+            loss, _ = self.forward()
+            loss.backward()
+            count["n"] += 1
+            return loss
+
+        while done < evals:
+            opt.step(closure)
+            self.w = (v * wscale).detach().requires_grad_(True)
+            done = count["n"]
+            m = self.evaluate64()
+            dt_s = time.time() - t0
+            log(f"{tag} evals {done:6d}  e2 {1e3*m['error_2']:8.3f} mHa  E_gap {m['E_gap']:.4f}  Lambda {m['Lambda']:.2f}  "
+                f"lam_eff {m['lambda_eff']:.3f}  ({dt_s:.0f}s, {done/max(dt_s,1e-9):.1f} evals/s)")
+            if best is None or m["error_2"] < best[0]:
+                best = (m["error_2"], self.numpy_state(), m)
+        self.w = (v * wscale).detach().requires_grad_(True)
+        return best
+
     def train_stage(self, steps: int, lr0: float, lr1: float, eval_every: int, tag: str, w_lr_scale: float = 1.0):
         params = [{"params": [self.u], "lr": lr0}, {"params": [self.w], "lr": lr0 * w_lr_scale}, {"params": [self.W], "lr": lr0}]
         opt = torch.optim.Adam(params)
@@ -157,6 +191,8 @@ def main() -> None:
     ap.add_argument("--beta", type=float, default=0.0, help="weight of the semidefiniteness penalty D(w)")
     ap.add_argument("--mu", type=float, default=0.0)
     ap.add_argument("--eval-every", type=int, default=2000)
+    ap.add_argument("--optim", choices=("adam", "lbfgs"), default="lbfgs")
+    ap.add_argument("--lbfgs-chunk", type=int, default=100, help="lbfgs: iterations per step() call (evaluation between chunks)")
     ap.add_argument("--bench", type=int, default=0, help="time this many steps and exit")
     ap.add_argument("--out-prefix", default="build/mps_")
     ap.add_argument("--seed", type=int, default=0)
@@ -193,7 +229,10 @@ def main() -> None:
             m = tr.evaluate64()
             log(f"after drop -> R {tr.R}: e2 {1e3*m['error_2']:.3f} mHa  E_gap {m['E_gap']:.4f}")
         steps = args.steps_first if (i == 0 and args.steps_first) else args.steps
-        best = tr.train_stage(steps, args.lr, args.lr_end, args.eval_every, tag=f"[R{tr.R}]", w_lr_scale=args.w_lr_scale)
+        if args.optim == "lbfgs":
+            best = tr.train_stage_lbfgs(steps, args.eval_every, tag=f"[R{tr.R}]", chunk=args.lbfgs_chunk)
+        else:
+            best = tr.train_stage(steps, args.lr, args.lr_end, args.eval_every, tag=f"[R{tr.R}]", w_lr_scale=args.w_lr_scale)
         err, (u, w, W), m = best
         out = f"{args.out_prefix}R{tr.R}.npz"
         save_state(out, u, w, W, m, base)

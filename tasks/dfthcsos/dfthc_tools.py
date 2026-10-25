@@ -27,8 +27,8 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 DATA = os.environ.get("VQCC_DATA", os.path.join(REPO, "data"))
-VERIFIER_DIR = os.path.join(DATA, "verifiers", "dfthcsos")
-SAMPLE_DIR = os.path.join(DATA, "sample_submission", "dfthcsos")
+VERIFIER_DIR = os.environ.get("VQCC_VERIFIER_DIR", os.path.join(DATA, "verifiers", "dfthcsos"))
+SAMPLE_DIR = os.environ.get("VQCC_SAMPLE_DIR", os.path.join(DATA, "sample_submission", "dfthcsos"))
 BUILD = os.environ.get("VQCC_BUILD", os.path.join(REPO, "build"))
 N = 76
 E_UPPER = -22140.27335

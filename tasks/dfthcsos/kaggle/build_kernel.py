@@ -20,6 +20,26 @@ from __future__ import annotations
 import os, sys
 ON_KAGGLE = os.path.isdir("/kaggle/input")
 if ON_KAGGLE:
+    # The competition data's layout on Kaggle may differ from the local unzip: locate the files.
+    def _find(target, root="/kaggle/input", want_dir=False, max_depth=6):
+        root_depth = root.rstrip("/").count("/")
+        for dp, dn, fn in os.walk(root):
+            if dp.count("/") - root_depth > max_depth:
+                dn[:] = []
+                continue
+            if (want_dir and target in dn) or (not want_dir and target in fn):
+                return os.path.join(dp, target)
+        return None
+    for top in sorted(os.listdir("/kaggle/input")):
+        p = os.path.join("/kaggle/input", top)
+        print("input:", p, sorted(os.listdir(p))[:12] if os.path.isdir(p) else "")
+    fcidump = _find("FeMoCo76o113e.fcidump")
+    sample = _find("angle_k_0.kmb") or _find("angle_k_0.kmx")
+    print("found fcidump:", fcidump, " sample:", sample)
+    if fcidump is None or sample is None:
+        raise SystemExit("competition data not found under /kaggle/input")
+    os.environ["VQCC_VERIFIER_DIR"] = os.path.dirname(fcidump)
+    os.environ["VQCC_SAMPLE_DIR"] = os.path.dirname(sample)
     os.environ.setdefault("VQCC_DATA", "/kaggle/input/google-verifiable-quantum-circuit-compilation")
     os.environ.setdefault("VQCC_BUILD", "/tmp/vqcc_build")
     os.makedirs("/tmp/vqcc_build", exist_ok=True)
@@ -29,9 +49,10 @@ FOOTER = '''
 
 if __name__ == "__main__":
     if ON_KAGGLE and len(sys.argv) == 1:
+        # Kaggle chain: the public schedule from the baseline, seed 1 (the Mac runs 60,55,48,... with seed 0)
         sys.argv += ["--device", "cuda", "--out-prefix", "/kaggle/working/stage_", "--init", os.environ.get("VQCC_INIT", "baseline"),
-                     "--schedule", os.environ.get("VQCC_SCHEDULE", "60,55,48,42,36,32,28,26"),
-                     "--steps", os.environ.get("VQCC_STEPS", "100000"), "--eval-every", "2000"]
+                     "--schedule", os.environ.get("VQCC_SCHEDULE", "55,48,42,36,32,28,26"),
+                     "--steps", os.environ.get("VQCC_STEPS", "100000"), "--eval-every", "2000", "--seed", "1"]
     main()
 '''
 
