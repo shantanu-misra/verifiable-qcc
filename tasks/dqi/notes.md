@@ -451,3 +451,17 @@ sweep plus ≈ 1.7 k on the extraction/conversion inverses.
 Q 915, T 1,392,254.13, 0 value / 18 phase failures (R 1.2500)** — `runs/dqi_1457063322771_23f3768d_full.json`.
 −12.6 % vs v16. 18 failures ≈ the model's 37 wrong shots × ½ (random phase), so v15/v16's 9 and 7 were the lucky end:
 the weight-35 gap class now costs ≈ 5 % in R.
+
+**Round 9c estimate — paired extraction (two levels per reciprocal).** With f = c·u, a₁ = f₁/c, the second-level
+input is h = w/f where x²w = c − (1 + a₁x)f, i.e. w_m = f_{m+2} + a₁f_{m+1} (one product per cell, in place). Then
+c' = w₀/c, a'₁ = w₁/(cc') + a₁, and the next window is h'' = q₂, q₃, … with q = s/(1 + a₁x), s = (w₀/w) − c'x²: one
+reciprocal chain on w/w₀ (window L−3) plus two linear recurrences (one product per cell each). Checked against two
+ordinary levels of the exact model (`build/model_pairs.py`, 0/200 mismatches). Per pair ≈ 3L + R(L−2) products instead
+of 2L + R(L) + R(L−2): one way 9,789 → 6,625 (scaling + shears), −3,164 products ≈ −266 k Toffolis (−20 % of v18's T).
+Records land in the same cells (c, a₁ | c', a'₁), so conversion and the gap pointer are unchanged; a level-B gap
+(w₀ = 0, w₁ ≠ 0) rotates the w cells exactly like the ordinary rotation (h/x = (w/x)/f). The "+a₁" terms must be
+gated by [cc' ≠ 0] so a terminal (zero) level B still yields a'₁ = 0 (12 CCX each). Peak Q unchanged if the two
+inverses (c, then cc') are not held together and both are released before the reciprocal.
+
+**v18 = `dqi_1393661418529_31bc11f2.kmb` (66-Toffoli tower inverse): full PASS, score 1.3937e12 (17.54×), Q 912,
+T 1,354,166.27, 0 value / 13 phase failures (R 1.2374)** — `runs/dqi_1393661418529_31bc11f2_full.json`. −4.4 % vs v17.

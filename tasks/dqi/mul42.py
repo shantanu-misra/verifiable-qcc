@@ -134,6 +134,70 @@ def build_terms(gf=None):
     return final
 
 
+def build_terms6(gf):
+    """15 ANDs for GF(2^6) (kickmix basis): GF(4)^3 Toom-Cook at {0, 1, w, w^2, inf}; exhaustively verified."""
+    from tmvp import gf2_matrix_inverse
+    a = gf.primitive_element
+    w = gf.pow(a, 21)                               # generator of GF(4)*
+    wb = [1, w]                                     # GF(2)-basis of GF(4)
+    def g4(x): return _solve_coords(wb, x, gf)      # GF(4) element -> 2 bits
+    g4_terms = [([0], [0], [1, 1]), ([1], [1], [1, 0]), ([0, 1], [0, 1], [0, 1])]   # (a0+a1w)(b0+b1w), w^2 = w+1
+    ab = [gf.pow(a, i) for i in range(3)]
+    basis6 = [gf.mul(wb[j], ab[i]) for i in range(3) for j in range(2)]
+    poly = [1]
+    for j in range(3):
+        r = gf.pow(a, 4 ** j)
+        poly = [(poly[i - 1] if i else 0) ^ gf.mul(r, poly[i]) if i < len(poly) else poly[i - 1] for i in range(len(poly) + 1)]
+    assert len(poly) == 4
+    ymod = [[1 if i == m else 0 for i in range(3)] for m in range(3)]
+    for m in range(3, 5):
+        prev = ymod[m - 1]; shifted = [0] + prev[:2]; top = prev[2]
+        ymod.append([shifted[i] ^ gf.mul(top, poly[i]) for i in range(3)])
+    pts = [0, 1, w, gf.mul(w, w)]
+    V = [[gf.pow(p, i) if i else 1 for i in range(4)] for p in pts]
+    Vinv = gf2_matrix_inverse(V, gf)
+    terms = []
+    for pi in range(5):
+        rows = [set(), set()]
+        for i in range(3):
+            for j in range(2):
+                val = (gf.mul(wb[j], gf.pow(pts[pi], i) if i else 1)) if pi < 4 else (wb[j] if i == 2 else 0)
+                for r, bit in enumerate(g4(val)):
+                    if bit: rows[r] ^= {2 * i + j}
+        def out_vec(wbits):
+            wv = (wbits[0] * 1) ^ (wbits[1] * w)
+            d = [0] * 5
+            if pi == 4:
+                d[4] = wv
+                corr = [gf.mul(wv, gf.pow(p, 4)) if p else 0 for p in pts]
+                for m in range(4):
+                    acc = 0
+                    for k in range(4): acc ^= gf.mul(Vinv[m][k], corr[k])
+                    d[m] = acc
+            else:
+                for m in range(4): d[m] = gf.mul(Vinv[m][pi], wv)
+            e = [0] * 3
+            for m in range(5):
+                for i in range(3): e[i] ^= gf.mul(d[m], ymod[m][i])
+            x = 0
+            for i in range(3): x ^= gf.mul(e[i], ab[i])
+            return x
+        outs = [out_vec([1, 0]), out_vec([0, 1])]
+        for L, R, mask in g4_terms:
+            xb = set(); yb = set()
+            for r in L: xb ^= rows[r]
+            for r in R: yb ^= rows[r]
+            m6 = (outs[0] if mask[0] else 0) ^ (outs[1] if mask[1] else 0)
+            terms.append((sorted(xb), sorted(yb), m6))
+    C = [_solve_coords(basis6, 1 << s, gf) for s in range(6)]
+    final = []
+    for xb, yb, m6 in terms:
+        xs = [s for s in range(6) if sum(C[s][c] for c in xb) & 1]
+        ys = [s for s in range(6) if sum(C[s][c] for c in yb) & 1]
+        if xs and ys and m6: final.append((xs, ys, m6))
+    return final
+
+
 def check(terms, gf, trials=2000):
     import random
     for _ in range(trials):

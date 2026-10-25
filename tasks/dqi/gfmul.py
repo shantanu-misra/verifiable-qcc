@@ -61,6 +61,9 @@ class GFMul:
         if self.n == 12 and algorithm in ('best', 'toom42'):
             from mul42 import build_terms                 # 42 ANDs: GF(8)^4 Toom-Cook (notes §10)
             self.terms = build_terms(field)
+        elif self.n == 6 and algorithm in ('best', 'toom15'):
+            from mul42 import build_terms6                # 15 ANDs: GF(4)^3 Toom-Cook
+            self.terms = build_terms6(field)
         else:                                             # Karatsuba 12 -> 6 -> 3: 51 ANDs
             self.terms = []
             for L, R, outs in karatsuba_terms(self.n):
