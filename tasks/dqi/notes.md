@@ -482,3 +482,18 @@ T 1,015,714.03, 0 value / 9 phase failures (R 1.2261)** — `runs/dqi_1035794640
 0 value / 11 phase failures (R 1.2319)** — `runs/dqi_1018990736589_a2fc298a_full.json`. −1.6 % vs v19: the sweep's
 unused `located` register is gone and the pair kernel uses scaffold-free inverses (+5.5 k Toffolis), so the extraction
 peak (912) dropped under the sweep's 900. Q profile: extraction 900, sweep 900, conversion 899, base 846.
+
+### 10b. Where v20's 1,021,303 Toffolis sit, and what is left
+
+| phase | per direction | both | content |
+|---|---|---|---|
+| extraction (17 pairs + 1 level) | 284,352 | 568,704 | shears ≈ 4,700 products × 42 ≈ 197 k; w / scaling / q recurrences ≈ 1,940 × 42 ≈ 81 k; rotations 14.7 k CSWAP; gated writes, flags, inverses |
+| conversion | 60,452 | 120,904 | 1,190 products × 42 = 50 k; P-list rotations 7.1 k CSWAP; inverses 3 k |
+| sweep (4,095 positions) | — | 331,695 | 81 per position: gated inverse 69, zero test 11 |
+
+Remaining levers, each estimated against R′Q′²T′ < 1.019e12: exact weight-35 gap level (+≈ 104 k T = +10 % for R
+1.232 → ≈ 1.197 = −2.8 %: no); a Λ = ω/σ' mod σ precomputation to drop the sweep inverse (needs 35 more cells: no);
+unnormalised reciprocal chains with a tracked scalar (the a₀ column stops being free: a wash); conversion without the
+c-scaling (the products only move: no); mask projection (≈ −0.5 %: marginal). Q 900 = 840 cells + 6 pointer + the
+sweep's 54 (inverse 12, scaffold 27, ladder 10, z, g_inv 3, …); the compact forms would cost 4,095 × ≥ 10 Toffolis
+per qubit saved. This architecture plateaus at ≈ 1.02e12 (24×); the public designs report 1.03e12.
