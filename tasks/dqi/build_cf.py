@@ -13,12 +13,15 @@ import kickmix as km
 
 from build_bm import BMDecoder          # reuses the sweep, GF products and tower inverse
 from tower import apply_gf2_matrix
+from tmvp import tmvp_algorithm
 
 
 class CFDecoder(BMDecoder):
-    def __init__(self, builder, n, field, m_positions, gaps=True):
+    def __init__(self, builder, n, field, m_positions, gaps=True, fast=True):
         super().__init__(builder, n, field, m_positions)
         self.frob = {}
+        self.fast = fast          # rank-reduced shears (notes §10) instead of the naive chain
+        self._cm, self._alg = {}, {}
         self.gaps = gaps          # handle one first-order gap exactly (pointer + rotation), see notes §9c
         self.ptr = None           # pointer register: 1-based index of the gap level, 0 = none
 
@@ -138,6 +141,140 @@ class CFDecoder(BMDecoder):
         self.is_zero(pivot, z)
         b.free(z)
 
+    # ---- rank-reduced shears (notes §10) ---------------------------------------------------------------
+    def cmul_xor(self, dst, src, lam):
+        """dst ^= lam * src (GF(2)-linear in src: CX only)."""
+        if lam == 0:
+            return
+        if lam == 1:
+            self.b.cx(src, dst); return
+        M = self._cm.get(lam)
+        if M is None:
+            cols = [self.gf.mul(lam, 1 << c) for c in range(self.deg)]
+            M = self._cm[lam] = [[c for c in range(self.deg) if (cols[c] >> r) & 1] for r in range(self.deg)]
+        for r in range(self.deg):
+            for c in M[r]:
+                self.b.cx(src[c], dst[r])
+
+    def root(self, lam, d):
+        """lam^(1/d) for d a power of two (Frobenius is a bijection)."""
+        s = d.bit_length() - 1
+        return self.gf.pow(lam, 1 << (self.deg - s)) if lam > 1 else lam
+
+    def gated_write(self, flag, src, dst, lam=1):
+        """dst ^= flag * lam * src with one scratch qubit (12 CCX)."""
+        b = self.b
+        t = b.alloc_qubits(1)[0]
+        if lam == 1:
+            for r in range(self.deg):
+                b.ccx(flag, src[r], dst[r])
+        else:
+            cols = [self.gf.mul(lam, 1 << c) for c in range(self.deg)]
+            for r in range(self.deg):
+                cs = [c for c in range(self.deg) if (cols[c] >> r) & 1]
+                for c in cs: b.cx(src[c], t)
+                b.ccx(flag, t, dst[r])
+                for c in cs: b.cx(src[c], t)
+        b.free(t)
+
+    def tmvp_block(self, rows, cols, coef, d, gate, sc):
+        """rows/cols: [(cell, position)] ascending; rows[k] ^= sum_j Frob_d(coef(m_k - m'_j)) * cols[j]; coef(i) -> cell a_i.
+        gate: flag qubit gating writes to the protected cell self._protected (or None). sc = (X, Y, Z) scratch cells."""
+        b = self.b
+        p, q = len(rows), len(cols)
+        if p == 0 or q == 0:
+            return
+        X, Y, Z = sc
+        def out(cell, src, lam):
+            if gate is not None and cell is self._protected:
+                self.gated_write(gate, src, cell, lam)
+            else:
+                self.cmul_xor(cell, src, lam)
+        if p == 1 or q == 1:                           # naive: p*q products = rank, no constants
+            for rc, m in rows:
+                for cc, mm in cols:
+                    a = coef(m - mm)
+                    b.cx(a, X); self.frob_inplace(X, d)
+                    if gate is not None and rc is self._protected:
+                        self.xor_prod(X, cc, Z); self.gated_write(gate, Z, rc); b.del_gf2_mul(X, cc, target=Z, field=self.gf)
+                    else:
+                        self.xor_prod(X, cc, rc)
+                    self.unfrob_inplace(X, d); b.cx(a, X)
+            return
+        key = (p, q)
+        if key not in self._alg:
+            self._alg[key] = tmvp_algorithm(p, q, self.gf)
+        alpha, beta, gamma = self._alg[key]
+        i_min = rows[0][1] - cols[-1][1]
+        N = p + q - 1
+        for m in range(N):
+            for n in range(N):
+                self.cmul_xor(X, coef(i_min + n), self.root(alpha[m][n], d))
+            self.frob_inplace(X, d)
+            for j in range(q):
+                self.cmul_xor(Y, cols[j][0], beta[m][j])
+            self.xor_prod(X, Y, Z)
+            for k in range(p):
+                out(rows[k][0], Z, gamma[m][k])
+            b.del_gf2_mul(X, Y, target=Z, field=self.gf)
+            for j in range(q):
+                self.cmul_xor(Y, cols[j][0], beta[m][j])
+            self.unfrob_inplace(X, d)
+            for n in range(N):
+                self.cmul_xor(X, coef(i_min + n), self.root(alpha[m][n], d))
+
+    def tri_block(self, items, coef, d, gate, sc, reverse):
+        """In-place unit-triangular Toeplitz update of a class vector: items[k] ^= sum_{j<k} Frob_d(coef(m_k - m_j)) items[j]."""
+        n = len(items)
+        if n <= 1:
+            return
+        lo, hi = items[:n // 2], items[n // 2:]
+        if not reverse:                               # hi <- Tri(hi) on the old values first, then hi += T lo, then lo
+            self.tri_block(hi, coef, d, gate, sc, False)
+            self.tmvp_block(hi, lo, coef, d, gate, sc)
+            self.tri_block(lo, coef, d, gate, sc, False)
+        else:
+            self.tri_block(lo, coef, d, gate, sc, True)
+            self.tmvp_block(hi, lo, coef, d, gate, sc)
+            self.tri_block(hi, coef, d, gate, sc, True)
+
+    def pass_fast(self, words, d, gate, sc, reverse):
+        """a <- a * (1 + sum_i a_i^d x^{di}) mod x^L in place (a_0 = 1 implicit), hi/lo recursion over residue classes."""
+        b = self.b
+        X = sc[0]
+        coef = lambda i: words[i - 1]
+        def cell(k): return words[k - 1]
+        def rec(L):
+            if L <= 2:
+                return
+            H = (L + 1) // 2                          # all coefficients a_i, i <= (L-1)/d, lie below H
+            if reverse:
+                rec(H)
+            for r in range(d):
+                lo = [(cell(k), k // d) for k in range(1, H) if k % d == r]
+                hi = [(cell(k), k // d) for k in range(H, L) if k % d == r]
+                if not hi:
+                    continue
+                def a0_column():                      # column a_0 = 1 (class 0): hi[m] ^= Frob_d(a_m), free
+                    if r != 0:
+                        return
+                    for rc, m in hi:
+                        a = coef(m); b.cx(a, X); self.frob_inplace(X, d)
+                        if gate is not None and rc is self._protected:
+                            self.gated_write(gate, X, rc)
+                        else:
+                            b.cx(X, rc)
+                        self.unfrob_inplace(X, d); b.cx(a, X)
+                if not reverse:
+                    self.tri_block(hi, coef, d, gate, sc, False)
+                    a0_column(); self.tmvp_block(hi, lo, coef, d, gate, sc)
+                else:
+                    self.tmvp_block(hi, lo, coef, d, gate, sc); a0_column()
+                    self.tri_block(hi, coef, d, gate, sc, True)
+            if not reverse:
+                rec(H)
+        rec(len(words) + 1)
+
     def reciprocal(self, words, *, reverse: bool = False, gate=None):
         """In-place unit-series inverse of [1] + words (the leading 1 is implicit): a <- a * a^(d), d = 2, 4, 16...
         With `gate`, writes to the last cell happen only if gate is set (the cell may be a parked zero)."""
@@ -163,6 +300,14 @@ class CFDecoder(BMDecoder):
         d, exponent, factors = 2, 1, []
         while exponent < n - 1:
             factors.append(d); exponent *= 1 + d; d *= d
+        if self.fast:
+            sc = [b.alloc_qubits(self.deg) for _ in range(3)]
+            self._protected = words[-1] if words else None
+            for d in (reversed(factors) if reverse else factors):
+                self.pass_fast(words, d, gate, sc, reverse)
+            for r in sc:
+                b.free(r)
+            return
         ops = []
         for d in factors:
             for k in range(n - 1, 0, -1):
@@ -269,12 +414,12 @@ class CFDecoder(BMDecoder):
             b.free(self.ptr); self.ptr = None
 
 
-def build_circuit(n: int, degree: int, m: int, gaps: bool = True) -> km.Circuit:
+def build_circuit(n: int, degree: int, m: int, gaps: bool = True, fast: bool = True) -> km.Circuit:
     gf = km.GF2Field(degree)
     b = km.CircuitBuilder()
     S = [b.create_quantum_register(degree, name=f'S{i}') for i in range(n)]
     E = [b.create_classical_register(degree, name=f'E{j}') for j in range(m)]
-    CFDecoder(b, n, gf, m, gaps=gaps).build(S, E)
+    CFDecoder(b, n, gf, m, gaps=gaps, fast=fast).build(S, E)
     return b.finish_circuit()
 
 
@@ -282,9 +427,9 @@ if __name__ == '__main__':
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument('output'); ap.add_argument('--n', type=int, default=70); ap.add_argument('--degree', type=int, default=12)
-    ap.add_argument('--m', type=int, default=4095); ap.add_argument('--no-gaps', action='store_true')
+    ap.add_argument('--m', type=int, default=4095); ap.add_argument('--no-gaps', action='store_true'); ap.add_argument('--naive', action='store_true')
     a = ap.parse_args()
-    c = build_circuit(a.n, a.degree, a.m, gaps=not a.no_gaps)
+    c = build_circuit(a.n, a.degree, a.m, gaps=not a.no_gaps, fast=not a.naive)
     c.to_file(a.output, format='kmb' if a.output.endswith('.kmb') else 'kmx')
     st = c.operation_statistics()
     print(f'wrote {a.output}: toffoli_like={st.num_toffoli_like} num_qubits={c.num_qubits} ops={len(c)}')

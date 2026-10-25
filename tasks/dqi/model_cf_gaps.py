@@ -64,7 +64,7 @@ if __name__ == "__main__" and not (len(sys.argv) > 3 and sys.argv[3] == "cells")
     main()
 
 
-def extract_cells(s, max_gaps=2):
+def extract_cells(s, max_gaps=1):
     """Cell-faithful extraction: returns (cells, flags) where cells is the 70-cell state after extraction."""
     w = s[:]; n = len(w); parked = 0; flags = []
     for start in range(0, n, 2):
@@ -125,10 +125,11 @@ def main2():
             e = len(q) - 1
             w, flags = extract_cells(S)
             p2, q2 = convert_cells(w, flags)
-            ok = (p2, q2) == (p, q)
-            res[(sum(flags), 'e35' if e == 35 else 'e<35', 'ok' if ok else 'BAD')] += 1
+            ok = (p2, q2) == (p, q) and not (tail and any(tail))
+            gaps = [r for r, _, _ in layers if r]
+            res[(len(gaps), max(gaps, default=0), 'e35' if e == 35 else 'e<35', 'ok' if ok else 'BAD')] += 1
         done += batch
-    print('cell model (gaps, weight, result):', dict(sorted(res.items())))
+    print('cell model (gap count, max gap order, weight, result):', dict(sorted(res.items())))
 
 if __name__ == '__main__' and len(sys.argv) > 3 and sys.argv[3] == 'cells':
     main2()

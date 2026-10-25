@@ -368,3 +368,50 @@ T 2,888,132.43, 0 value / 9 phase failures (ε⁺ 1.16e-3, R 1.2261)** — `runs
 −8.5 % vs v14 with the naive reciprocal chain; the T budget is now the shears (≈ 2.2 M of 2.89 M), then the sweep (0.37 M).
 Q profile (live_profile on m=63): sweep/forney_step peaks at 927, extraction 903, conversion 902, base 858 = 840 cells +
 6 pointer + 12 for the constant-one register of A2[0] (removable: fold q₀ = 1 into the sweep's sums).
+
+## 10. Round 8 estimates (v15 → rank-reduced shears), before building
+
+**Where the 2,888,222 static Toffolis sit** (analyzer on the m=63 build, sweep scaled ×65; `build/dqi_cf2_m63.kmx`):
+
+| phase | per direction | both | of which |
+|---|---|---|---|
+| extraction (35 levels) | 1,188,368 | 2,376,736 | reciprocal chain 21,450 products × 51 = 1,094 k; scaling 1,225 × 51 = 62 k; gated end-cell writes ≈ 12 k; rotations 14.7 k CSWAP; inverses + flags ≈ 6 k |
+| conversion | 71,468 | 142,936 | 1,190 products × 51 = 61 k; P-list rotations 7.1 k CSWAP; inverses 4 k |
+| sweep (4,095 positions) | — | 368,550 | ≈ 90 per position (tower inverse 78, zero test 11, …) |
+
+So the shears are 76 % of T. Everything else is 0.51 M.
+
+**Shear reduction (modelled in `build/shear_count.py`, checked algorithm in `build/tmvp_eval.py`).** Pass d of the
+Frobenius chain is a ← a·(1 + Σ_i a_i^d x^{di}) mod x^L, i.e. d independent unit-triangular Toeplitz products, one per
+residue class mod d. In place, a class vector of n cells is updated by the recursion Tri(n) = TMVP(⌊n/2⌋×⌈n/2⌉) +
+Tri(⌈n/2⌉) + Tri(⌊n/2⌋) (hi part first, reading the untouched lo part; hi/lo of the whole window first, then recurse into
+lo, so all coefficients a_i, i < L/d, are read before they change). A dense p×q Toeplitz block costs p+q−1 GF(4096)
+products by evaluation/interpolation (transposed Toom–Cook: y = E_pᵀ((Iᵀt) ⊙ (E_q rev v)), numerically verified for
+sizes up to 35×34); every linear part (GF(4096) constants, Frobenius of the operand sums, output fan-out) is CX-only,
+so a block needs three scratch cells (operand sums X, Y, product Z erased for free by `del_gf2_mul`). Tri(n) comes out
+at ≈ n log₂n − n (balanced split is optimal under this recurrence; the short-product rank 2n−3 is out of reach in place).
+
+| strategy | products one way | shear Toffolis both ways (51/product) | T estimate |
+|---|---|---|---|
+| naive (v15) | 21,450 | 2,188 k | 2,888 k |
+| Karatsuba blocks (0/1 constants) | 11,744 | 1,198 k | 1,898 k |
+| evaluation-rank blocks | 8,564 | 874 k | **≈ 1,574 k** |
+| + 42-Toffoli multiplier on all 10,979 products/way | 8,564 | 719 k | ≈ 1,380 k |
+
+Per level L = 70 the three passes (d = 2, 4, 16) go from 1,156 / 561 / 116 to 289 / 222 / 95 products. Q: X, Y, Z replace
+tmp + gtmp, so the extraction peak moves 903 → ≈ 915, still under the sweep's 927 — no Q change. Circuit size: the
+constants cost ≈ 6–9 k CX per product, ≈ +100 M ops (≈ 200 M total, ~1.8 GB .kmb); v15's full run took 2 min 50 s (bit-sliced batches), so runtime is no concern; the build was ≈ 10 min.
+Estimated cost at Q 927, T 1.57 M, R 1.226: 1.66e12 (14.7×); with R 1.191 and the 42-multiplier ≈ 1.41e12 (17.3×).
+Break-even rule R′Q′²T′ < 3.043e12 is cleared by a factor ≈ 1.9.
+
+**Kernel status (built after the estimate).** `tmvp_block` / `tri_block` / `pass_fast` in build_cf.py (constants from
+`tmvp.py`); the hi/lo split must be ⌈L/2⌉ so every coefficient a_i, i ≤ (L−1)/d, stays in the untouched lo half, and
+within a block the triangular part is applied to the old values before the hi += T·lo accumulation. Checks: reciprocal
+alone exact for n = 2..12 (GF(2⁶)) and n = 35, 69 (GF(2¹²)); full window n = 69: 30,804 Toffolis vs 93,483 naive (×3.03);
+toy decoders GF(2⁴) n=8 / GF(2⁶) n=12 unchanged (phase errors only on model-wrong inputs, 0 value errors).
+
+**v16 = `dqi_1666385650802_08243c62.kmb` (build_cf.py, fast shears + one-gap handling): full PASS, score 1.6664e12
+(14.67×), Q 927, T 1,589,677.71, 0 value / 7 phase failures (R 1.2199)** — `runs/dqi_1666385650802_08243c62_full.json`.
+−45 % vs v15; static count 1,589,768 (estimate 1,574 k); 92.4 M ops / 860 MB (no growth: fewer products' internal CX
+offset the constants); smoke 2,560 shots 0/0. Remaining T: shears ≈ 0.87 M, sweep 0.37 M, scaling + conversion 0.25 M,
+gap handling + inverses ≈ 0.1 M.
